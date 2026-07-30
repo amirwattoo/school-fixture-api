@@ -1,0 +1,563 @@
+
+> @school-fixture/api@0.1.0 test
+> node --import ./tests/tsx-windows-preload.mjs --import tsx --test tests/auth.test.ts tests/phase3.test.ts tests/phase4.test.ts tests/phase5.test.ts tests/timetable-import.test.ts tests/fixture-rules.test.ts
+
+TAP version 13
+# ◇ injected env (23) from ..\\..\\.env // tip: ⌘ enable debugging { debug: true }
+# ◇ injected env (0) from .env // tip: ⌘ enable debugging { debug: true }
+# Subtest: bcrypt hashes and verifies passwords without storing plaintext
+ok 1 - bcrypt hashes and verifies passwords without storing plaintext
+  ---
+  duration_ms: 3771.0256
+  type: 'test'
+  ...
+# Subtest: successful login returns an access token and HTTP-only refresh cookie
+ok 2 - successful login returns an access token and HTTP-only refresh cookie
+  ---
+  duration_ms: 1544.2301
+  type: 'test'
+  ...
+# Subtest: invalid password uses a generic credentials error
+ok 3 - invalid password uses a generic credentials error
+  ---
+  duration_ms: 918.1686
+  type: 'test'
+  ...
+# Subtest: inactive users cannot log in
+ok 4 - inactive users cannot log in
+  ---
+  duration_ms: 953.7411
+  type: 'test'
+  ...
+# Subtest: access token verifies and contains the minimal authorization claims
+ok 5 - access token verifies and contains the minimal authorization claims
+  ---
+  duration_ms: 869.5712
+  type: 'test'
+  ...
+# Subtest: /auth/me rejects anonymous access and returns the authenticated user
+ok 6 - /auth/me rejects anonymous access and returns the authenticated user
+  ---
+  duration_ms: 768.8814
+  type: 'test'
+  ...
+# Subtest: refresh rotates tokens and rejects the replaced token
+ok 7 - refresh rotates tokens and rejects the replaced token
+  ---
+  duration_ms: 596.9875
+  type: 'test'
+  ...
+# Subtest: logout revokes the presented refresh token
+ok 8 - logout revokes the presented refresh token
+  ---
+  duration_ms: 558.7364
+  type: 'test'
+  ...
+# Subtest: Principal can create a Timetable Incharge without exposing passwordHash
+ok 9 - Principal can create a Timetable Incharge without exposing passwordHash
+  ---
+  duration_ms: 868.057
+  type: 'test'
+  ...
+# Subtest: Timetable Incharge is denied Principal-only user routes
+ok 10 - Timetable Incharge is denied Principal-only user routes
+  ---
+  duration_ms: 395.6495
+  type: 'test'
+  ...
+# Subtest: user listing is isolated to the Principal's school
+ok 11 - user listing is isolated to the Principal's school
+  ---
+  duration_ms: 398.5657
+  type: 'test'
+  ...
+# ◇ injected env (6) from ..\\..\\.env // tip: ⌘ enable debugging { debug: true }
+# ◇ injected env (0) from .env // tip: ⌘ suppress logs { quiet: true }
+# Subtest: 2026-08-03 resolves to MONDAY in Asia/Karachi
+ok 12 - 2026-08-03 resolves to MONDAY in Asia/Karachi
+  ---
+  duration_ms: 2866.8813
+  type: 'test'
+  ...
+# Subtest: 2026-08-04 resolves to TUESDAY in Asia/Karachi
+ok 13 - 2026-08-04 resolves to TUESDAY in Asia/Karachi
+  ---
+  duration_ms: 3.0573
+  type: 'test'
+  ...
+# Subtest: 2026-08-07 resolves to FRIDAY in Asia/Karachi
+ok 14 - 2026-08-07 resolves to FRIDAY in Asia/Karachi
+  ---
+  duration_ms: 3.7861
+  type: 'test'
+  ...
+# Subtest: 2026-08-08 resolves to SATURDAY in Asia/Karachi
+ok 15 - 2026-08-08 resolves to SATURDAY in Asia/Karachi
+  ---
+  duration_ms: 1.6198
+  type: 'test'
+  ...
+# Subtest: 2026-08-09 resolves to SUNDAY in Asia/Karachi
+ok 16 - 2026-08-09 resolves to SUNDAY in Asia/Karachi
+  ---
+  duration_ms: 4.4675
+  type: 'test'
+  ...
+# Subtest: period-aware attendance availability follows every exception rule
+ok 17 - period-aware attendance availability follows every exception rule
+  ---
+  duration_ms: 8.105
+  type: 'test'
+  ...
+# Subtest: partial-day attendance validation requires a valid period range
+ok 18 - partial-day attendance validation requires a valid period range
+  ---
+  duration_ms: 17.6282
+  type: 'test'
+  ...
+# Subtest: workload normalization uses effective workload and deterministic ties
+ok 19 - workload normalization uses effective workload and deterministic ties
+  ---
+  duration_ms: 6.2278
+  type: 'test'
+  ...
+# Subtest: Azhar Abbas scores above Muhammad Talha when both are eligible
+ok 20 - Azhar Abbas scores above Muhammad Talha when both are eligible
+  ---
+  duration_ms: 256.4754
+  type: 'test'
+  ...
+# Subtest: shared eligibility excludes attendance, timetable, fixture, and original teacher conflicts
+ok 21 - shared eligibility excludes attendance, timetable, fixture, and original teacher conflicts
+  ---
+  duration_ms: 145.6614
+  type: 'test'
+  ...
+# Subtest: historical PRESENT records remain readable while missing rows are present by default
+ok 22 - historical PRESENT records remain readable while missing rows are present by default
+  ---
+  duration_ms: 157.3064
+  type: 'test'
+  ...
+# [fixture-generation-diagnostic] {
+#   authenticatedUserId: 'cms7d881j0000ua2g3kt64jyd',
+#   authenticatedSchoolId: 'fixture-rules-test-school',
+#   absentTeacherId: 'cms7d884a0006ua2gksmnoiaj',
+#   absentTeacherName: 'Late Teacher',
+#   absentTeacherSchoolId: 'fixture-rules-test-school'
+# }
+# [fixture-generation-diagnostic] {
+#   authenticatedUserId: 'cms7d881j0000ua2g3kt64jyd',
+#   authenticatedSchoolId: 'fixture-rules-test-school',
+#   absentTeacherId: 'cms7d884r0008ua2gmvpjaodn',
+#   absentTeacherName: 'Short Leave Teacher',
+#   absentTeacherSchoolId: 'fixture-rules-test-school'
+# }
+# [fixture-generation-diagnostic] {
+#   authenticatedUserId: 'cms7d881j0000ua2g3kt64jyd',
+#   authenticatedSchoolId: 'fixture-rules-test-school',
+#   absentTeacherId: 'cms7d885y000eua2g0aupvutk',
+#   absentTeacherName: 'Fixture Busy',
+#   absentTeacherSchoolId: 'fixture-rules-test-school'
+# }
+# [fixture-generation-diagnostic] {
+#   authenticatedUserId: 'cms7d881j0000ua2g3kt64jyd',
+#   authenticatedSchoolId: 'fixture-rules-test-school',
+#   absentTeacherId: 'cms7d884a0006ua2gksmnoiaj',
+#   absentTeacherName: 'Late Teacher',
+#   absentTeacherSchoolId: 'fixture-rules-test-school'
+# }
+# [fixture-generation-diagnostic] {
+#   authenticatedUserId: 'cms7d881j0000ua2g3kt64jyd',
+#   authenticatedSchoolId: 'fixture-rules-test-school',
+#   absentTeacherId: 'cms7d884r0008ua2gmvpjaodn',
+#   absentTeacherName: 'Short Leave Teacher',
+#   absentTeacherSchoolId: 'fixture-rules-test-school'
+# }
+# Subtest: short leave from lesson 5 generates only lessons 5, 6, and 8, not lesson 2
+ok 23 - short leave from lesson 5 generates only lessons 5, 6, and 8, not lesson 2
+  ---
+  duration_ms: 1242.0433
+  type: 'test'
+  ...
+# [fixture-generation-diagnostic] {
+#   authenticatedUserId: 'cms7d881j0000ua2g3kt64jyd',
+#   authenticatedSchoolId: 'fixture-rules-test-school',
+#   absentTeacherId: 'cms7d884a0006ua2gksmnoiaj',
+#   absentTeacherName: 'Late Teacher',
+#   absentTeacherSchoolId: 'fixture-rules-test-school'
+# }
+# Subtest: partial day generates fixtures only outside its available range
+ok 24 - partial day generates fixtures only outside its available range
+  ---
+  duration_ms: 223.7676
+  type: 'test'
+  ...
+# [fixture-generation-diagnostic] {
+#   authenticatedUserId: 'cms7d881j0000ua2g3kt64jyd',
+#   authenticatedSchoolId: 'fixture-rules-test-school',
+#   absentTeacherId: 'cms7d883c0002ua2gni3odafx',
+#   absentTeacherName: 'Original Absent',
+#   absentTeacherSchoolId: 'fixture-rules-test-school'
+# }
+# Subtest: zero fixture generation returns actionable diagnostics
+ok 25 - zero fixture generation returns actionable diagnostics
+  ---
+  duration_ms: 43.8532
+  type: 'test'
+  ...
+# Subtest: override eligibility excludes teachers outside a partial-day range
+ok 26 - override eligibility excludes teachers outside a partial-day range
+  ---
+  duration_ms: 47.5836
+  type: 'test'
+  ...
+# Subtest: fixture generation rejects weekend date 2026-08-08
+ok 27 - fixture generation rejects weekend date 2026-08-08
+  ---
+  duration_ms: 25.4524
+  type: 'test'
+  ...
+# Subtest: fixture generation rejects weekend date 2026-08-09
+ok 28 - fixture generation rejects weekend date 2026-08-09
+  ---
+  duration_ms: 17.125
+  type: 'test'
+  ...
+# ◇ injected env (23) from ..\\..\\.env // tip: ⌘ multiple files { path: ['.env.local', '.env'] }
+# ◇ injected env (0) from .env // tip: ◈ encrypted .env [www.dotenvx.com]
+# Subtest: normalizes Pakistani WhatsApp numbers for Click-to-Chat
+ok 29 - normalizes Pakistani WhatsApp numbers for Click-to-Chat
+  ---
+  duration_ms: 4972.6331
+  type: 'test'
+  ...
+# Subtest: cleans and deduplicates teacher specializations
+ok 30 - cleans and deduplicates teacher specializations
+  ---
+  duration_ms: 6.9882
+  type: 'test'
+  ...
+# Subtest: generates class names and derives teaching levels
+ok 31 - generates class names and derives teaching levels
+  ---
+  duration_ms: 0.9874
+  type: 'test'
+  ...
+# Subtest: validates period range against school configuration
+ok 32 - validates period range against school configuration
+  ---
+  duration_ms: 2.7139
+  type: 'test'
+  ...
+# Subtest: orders weekdays logically rather than alphabetically
+ok 33 - orders weekdays logically rather than alphabetically
+  ---
+  duration_ms: 0.8806
+  type: 'test'
+  ...
+# Subtest: Principal creates a normalized teacher
+ok 34 - Principal creates a normalized teacher
+  ---
+  duration_ms: 76.9826
+  type: 'test'
+  ...
+# Subtest: rejects a duplicate employee code within the school
+ok 35 - rejects a duplicate employee code within the school
+  ---
+  duration_ms: 351.3156
+  type: 'test'
+  ...
+# Subtest: teacher detail is isolated by school
+ok 36 - teacher detail is isolated by school
+  ---
+  duration_ms: 57.4088
+  type: 'test'
+  ...
+# Subtest: normalizes subjects and rejects capitalization duplicates
+ok 37 - normalizes subjects and rejects capitalization duplicates
+  ---
+  duration_ms: 165.5152
+  type: 'test'
+  ...
+# Subtest: derives class level and rejects duplicate grade-section
+ok 38 - derives class level and rejects duplicate grade-section
+  ---
+  duration_ms: 304.8574
+  type: 'test'
+  ...
+# Subtest: creates a timetable entry and permits a self-excluding update
+ok 39 - creates a timetable entry and permits a self-excluding update
+  ---
+  duration_ms: 447.6583
+  type: 'test'
+  ...
+# Subtest: rejects teacher and class timetable conflicts specifically
+ok 40 - rejects teacher and class timetable conflicts specifically
+  ---
+  duration_ms: 143.962
+  type: 'test'
+  ...
+# Subtest: rejects inactive and other-school timetable resources
+ok 41 - rejects inactive and other-school timetable resources
+  ---
+  duration_ms: 149.3091
+  type: 'test'
+  ...
+# Subtest: both Principal and Timetable Incharge satisfy Phase 3 RBAC
+ok 42 - both Principal and Timetable Incharge satisfy Phase 3 RBAC
+  ---
+  duration_ms: 59.7016
+  type: 'test'
+  ...
+# ◇ injected env (23) from ..\\..\\.env // tip: ⌘ enable debugging { debug: true }
+# ◇ injected env (0) from .env // tip: ⌘ suppress logs { quiet: true }
+# Subtest: date-only utilities avoid timezone shifts and calculate boundaries
+ok 43 - date-only utilities avoid timezone shifts and calculate boundaries
+  ---
+  duration_ms: 5621.5996
+  type: 'test'
+  ...
+# Subtest: 100-point scoring components and deterministic ties work
+ok 44 - 100-point scoring components and deterministic ties work
+  ---
+  duration_ms: 7.7128
+  type: 'test'
+  ...
+# Subtest: saves bulk attendance and enforces school isolation
+ok 45 - saves bulk attendance and enforces school isolation
+  ---
+  duration_ms: 594.239
+  type: 'test'
+  ...
+# [fixture-generation-diagnostic] {
+#   authenticatedUserId: 'cms7d89y60000uavsy7oefe4e',
+#   authenticatedSchoolId: 'phase-4-integration-school',
+#   absentTeacherId: 'cms7d89zr0003uavsjnctsvy2',
+#   absentTeacherName: 'Absent Alpha',
+#   absentTeacherSchoolId: 'phase-4-integration-school'
+# }
+# [fixture-generation-diagnostic] {
+#   authenticatedUserId: 'cms7d89y60000uavsy7oefe4e',
+#   authenticatedSchoolId: 'phase-4-integration-school',
+#   absentTeacherId: 'cms7d8a0e0005uavsapcz973q',
+#   absentTeacherName: 'Absent Beta',
+#   absentTeacherSchoolId: 'phase-4-integration-school'
+# }
+# Subtest: generates absent lectures with eligible candidates and immediate workload balance
+ok 46 - generates absent lectures with eligible candidates and immediate workload balance
+  ---
+  duration_ms: 891.9018
+  type: 'test'
+  ...
+# [fixture-generation-diagnostic] {
+#   authenticatedUserId: 'cms7d89y60000uavsy7oefe4e',
+#   authenticatedSchoolId: 'phase-4-integration-school',
+#   absentTeacherId: 'cms7d89zr0003uavsjnctsvy2',
+#   absentTeacherName: 'Absent Alpha',
+#   absentTeacherSchoolId: 'phase-4-integration-school'
+# }
+# [fixture-generation-diagnostic] {
+#   authenticatedUserId: 'cms7d89y60000uavsy7oefe4e',
+#   authenticatedSchoolId: 'phase-4-integration-school',
+#   absentTeacherId: 'cms7d8a0e0005uavsapcz973q',
+#   absentTeacherName: 'Absent Beta',
+#   absentTeacherSchoolId: 'phase-4-integration-school'
+# }
+# Subtest: duplicate generation returns existing fixtures without recounting
+ok 47 - duplicate generation returns existing fixtures without recounting
+  ---
+  duration_ms: 336.4759
+  type: 'test'
+  ...
+# Subtest: scoring API returns complete current workload details
+ok 48 - scoring API returns complete current workload details
+  ---
+  duration_ms: 81.4363
+  type: 'test'
+  ...
+# Subtest: override candidates use shared eligibility and exclude every unavailable teacher
+ok 49 - override candidates use shared eligibility and exclude every unavailable teacher
+  ---
+  duration_ms: 88.9906
+  type: 'test'
+  ...
+# [fixture-generation-diagnostic] {
+#   authenticatedUserId: 'cms7d89y60000uavsy7oefe4e',
+#   authenticatedSchoolId: 'phase-4-integration-school',
+#   absentTeacherId: 'cms7d8a19000buavssbucrbt5',
+#   absentTeacherName: 'Charlie Candidate',
+#   absentTeacherSchoolId: 'phase-4-integration-school'
+# }
+# [fixture-generation-diagnostic] {
+#   authenticatedUserId: 'cms7d89y60000uavsy7oefe4e',
+#   authenticatedSchoolId: 'phase-4-integration-school',
+#   absentTeacherId: 'cms7d8a19000buavssbucrbt5',
+#   absentTeacherName: 'Charlie Candidate',
+#   absentTeacherSchoolId: 'phase-4-integration-school'
+# }
+# Subtest: attendance changes flag affected drafts and restoring availability clears the warning
+ok 50 - attendance changes flag affected drafts and restoring availability clears the warning
+  ---
+  duration_ms: 610.0859
+  type: 'test'
+  ...
+# Subtest: manual override transfers counts and same-teacher override is stable
+ok 51 - manual override transfers counts and same-teacher override is stable
+  ---
+  duration_ms: 272.0791
+  type: 'test'
+  ...
+# Subtest: cancellation decrements once and publication rejects unassigned drafts
+ok 52 - cancellation decrements once and publication rejects unassigned drafts
+  ---
+  duration_ms: 128.5049
+  type: 'test'
+  ...
+# Subtest: cancelling unassigned fixture allows publication without workload changes
+ok 53 - cancelling unassigned fixture allows publication without workload changes
+  ---
+  duration_ms: 183.8339
+  type: 'test'
+  ...
+# [fixture-generation-diagnostic] {
+#   authenticatedUserId: 'cms7d89y60000uavsy7oefe4e',
+#   authenticatedSchoolId: 'phase-4-integration-school',
+#   absentTeacherId: 'cms7d8a0z0009uavsg5kj1wb2',
+#   absentTeacherName: 'Bob Candidate',
+#   absentTeacherSchoolId: 'phase-4-integration-school'
+# }
+# Subtest: attendance changes warn about published fixtures without modifying them
+ok 54 - attendance changes warn about published fixtures without modifying them
+  ---
+  duration_ms: 226.5625
+  type: 'test'
+  ...
+# Subtest: attendance reports keep partial-day exceptions separate with period details
+ok 55 - attendance reports keep partial-day exceptions separate with period details
+  ---
+  duration_ms: 25.671
+  type: 'test'
+  ...
+# Subtest: weekly, yearly, and teacher history records reflect committed workloads
+ok 56 - weekly, yearly, and teacher history records reflect committed workloads
+  ---
+  duration_ms: 61.7834
+  type: 'test'
+  ...
+# Subtest: both roles can access Phase 4 APIs
+ok 57 - both roles can access Phase 4 APIs
+  ---
+  duration_ms: 45.288
+  type: 'test'
+  ...
+# ◇ injected env (23) from ..\\..\\.env // tip: ◈ encrypted .env [www.dotenvx.com]
+# ◇ injected env (0) from .env // tip: ⌘ custom filepath { path: '/custom/path/.env' }
+# Subtest: normalizes Pakistani numbers for Click-to-Chat
+ok 58 - normalizes Pakistani numbers for Click-to-Chat
+  ---
+  duration_ms: 4896.6652
+  type: 'test'
+  ...
+# Subtest: renders safe fixture messages and stable idempotency keys
+ok 59 - renders safe fixture messages and stable idempotency keys
+  ---
+  duration_ms: 164.507
+  type: 'test'
+  ...
+# Subtest: builds an encoded WhatsApp Click-to-Chat URL
+ok 60 - builds an encoded WhatsApp Click-to-Chat URL
+  ---
+  duration_ms: 5.5258
+  type: 'test'
+  ...
+# Subtest: publication creates READY notifications without mock delivery
+ok 61 - publication creates READY notifications without mock delivery
+  ---
+  duration_ms: 1010.7522
+  type: 'test'
+  ...
+# [whatsapp-click-to-chat-url] https://wa.me/923001230000?text=Phase%205%20Integration%20School%0A%0ADear%20Mock%20Failure%20Teacher%2C%0A%0AYour%20fixture%20duty%20has%20been%20assigned.%0A%0ADate%3A%2010%20Aug%202026%0ADay%3A%20Monday%0APeriod%3A%202%0AClass%3A%20Grade%209-B%0ASubject%3A%20Mathematics%0AAbsent%20Teacher%3A%20Absent%20Teacher%0A%0APlease%20attend%20the%20assigned%20class%20during%20this%20period.%0A%0ADeveloped%20by%20M.%20Aamir%20Wattoo%0ACI%2C%20FGPS%20%26%20College%20No.%202
+# [whatsapp-click-to-chat-url] https://wa.me/923001234567?text=Phase%205%20Integration%20School%0A%0ADear%20Valid%20Teacher%2C%0A%0AYour%20fixture%20duty%20has%20been%20assigned.%0A%0ADate%3A%2010%20Aug%202026%0ADay%3A%20Monday%0APeriod%3A%201%0AClass%3A%20Grade%209-A%0ASubject%3A%20Mathematics%0AAbsent%20Teacher%3A%20Absent%20Teacher%0A%0APlease%20attend%20the%20assigned%20class%20during%20this%20period.%0A%0ADeveloped%20by%20M.%20Aamir%20Wattoo%0ACI%2C%20FGPS%20%26%20College%20No.%202
+# Subtest: missing and invalid numbers return visible Click-to-Chat errors
+ok 62 - missing and invalid numbers return visible Click-to-Chat errors
+  ---
+  duration_ms: 149.0792
+  type: 'test'
+  ...
+# Subtest: duplicate publication creates no duplicate notifications
+ok 63 - duplicate publication creates no duplicate notifications
+  ---
+  duration_ms: 190.5943
+  type: 'test'
+  ...
+# [whatsapp-click-to-chat-url] https://wa.me/923001230000?text=Phase%205%20Integration%20School%0A%0ADear%20Mock%20Failure%20Teacher%2C%0A%0AYour%20fixture%20duty%20has%20been%20assigned.%0A%0ADate%3A%2010%20Aug%202026%0ADay%3A%20Monday%0APeriod%3A%202%0AClass%3A%20Grade%209-B%0ASubject%3A%20Mathematics%0AAbsent%20Teacher%3A%20Absent%20Teacher%0A%0APlease%20attend%20the%20assigned%20class%20during%20this%20period.%0A%0ADeveloped%20by%20M.%20Aamir%20Wattoo%0ACI%2C%20FGPS%20%26%20College%20No.%202
+# [whatsapp-click-to-chat-url] https://wa.me/923001234567?text=Phase%205%20Integration%20School%0A%0ADear%20Valid%20Teacher%2C%0A%0AYour%20fixture%20duty%20has%20been%20assigned.%0A%0ADate%3A%2010%20Aug%202026%0ADay%3A%20Monday%0APeriod%3A%201%0AClass%3A%20Grade%209-A%0ASubject%3A%20Mathematics%0AAbsent%20Teacher%3A%20Absent%20Teacher%0A%0APlease%20attend%20the%20assigned%20class%20during%20this%20period.%0A%0ADeveloped%20by%20M.%20Aamir%20Wattoo%0ACI%2C%20FGPS%20%26%20College%20No.%202
+# [whatsapp-click-to-chat-url] https://wa.me/923001234567?text=Phase%205%20Integration%20School%0A%0ADear%20Valid%20Teacher%2C%0A%0AYour%20fixture%20duty%20has%20been%20assigned.%0A%0ADate%3A%2010%20Aug%202026%0ADay%3A%20Monday%0APeriod%3A%201%0AClass%3A%20Grade%209-A%0ASubject%3A%20Mathematics%0AAbsent%20Teacher%3A%20Absent%20Teacher%0A%0APlease%20attend%20the%20assigned%20class%20during%20this%20period.%0A%0ADeveloped%20by%20M.%20Aamir%20Wattoo%0ACI%2C%20FGPS%20%26%20College%20No.%202
+# Subtest: notification APIs filter READY data and enforce school isolation
+ok 64 - notification APIs filter READY data and enforce school isolation
+  ---
+  duration_ms: 246.8352
+  type: 'test'
+  ...
+# [whatsapp-click-to-chat-url] https://wa.me/923001234567?text=Phase%205%20Integration%20School%0A%0ADear%20Valid%20Teacher%2C%0A%0AYour%20fixture%20duty%20has%20been%20assigned.%0A%0ADate%3A%2010%20Aug%202026%0ADay%3A%20Monday%0APeriod%3A%201%0AClass%3A%20Grade%209-A%0ASubject%3A%20Mathematics%0AAbsent%20Teacher%3A%20Absent%20Teacher%0A%0APlease%20attend%20the%20assigned%20class%20during%20this%20period.%0A%0ADeveloped%20by%20M.%20Aamir%20Wattoo%0ACI%2C%20FGPS%20%26%20College%20No.%202
+# [whatsapp-click-to-chat-url] https://wa.me/923001234567?text=Phase%205%20Integration%20School%0A%0ADear%20Valid%20Teacher%2C%0A%0AYour%20fixture%20duty%20has%20been%20assigned.%0A%0ADate%3A%2010%20Aug%202026%0ADay%3A%20Monday%0APeriod%3A%201%0AClass%3A%20Grade%209-A%0ASubject%3A%20Mathematics%0AAbsent%20Teacher%3A%20Absent%20Teacher%0A%0APlease%20attend%20the%20assigned%20class%20during%20this%20period.%0A%0ADeveloped%20by%20M.%20Aamir%20Wattoo%0ACI%2C%20FGPS%20%26%20College%20No.%202
+# Subtest: opening Click-to-Chat updates the same record without marking it sent
+ok 65 - opening Click-to-Chat updates the same record without marking it sent
+  ---
+  duration_ms: 203.0798
+  type: 'test'
+  ...
+# [whatsapp-click-to-chat-url] https://wa.me/923001234567?text=Phase%205%20Integration%20School%0A%0ADear%20Valid%20Teacher%2C%0A%0AYour%20fixture%20duty%20has%20been%20assigned.%0A%0ADate%3A%2010%20Aug%202026%0ADay%3A%20Monday%0APeriod%3A%201%0AClass%3A%20Grade%209-A%0ASubject%3A%20Mathematics%0AAbsent%20Teacher%3A%20Absent%20Teacher%0A%0APlease%20attend%20the%20assigned%20class%20during%20this%20period.%0A%0ADeveloped%20by%20M.%20Aamir%20Wattoo%0ACI%2C%20FGPS%20%26%20College%20No.%202
+# [whatsapp-click-to-chat-url] https://wa.me/923001234567?text=Phase%205%20Integration%20School%0A%0ADear%20Valid%20Teacher%2C%0A%0AYour%20fixture%20duty%20has%20been%20assigned.%0A%0ADate%3A%2010%20Aug%202026%0ADay%3A%20Monday%0APeriod%3A%201%0AClass%3A%20Grade%209-A%0ASubject%3A%20Mathematics%0AAbsent%20Teacher%3A%20Absent%20Teacher%0A%0APlease%20attend%20the%20assigned%20class%20during%20this%20period.%0A%0ADeveloped%20by%20M.%20Aamir%20Wattoo%0ACI%2C%20FGPS%20%26%20College%20No.%202
+# Subtest: manual confirmation is explicit and idempotent
+ok 66 - manual confirmation is explicit and idempotent
+  ---
+  duration_ms: 256.9842
+  type: 'test'
+  ...
+# Subtest: both roles can view safe provider status and unauthenticated access is rejected
+ok 67 - both roles can view safe provider status and unauthenticated access is rejected
+  ---
+  duration_ms: 44.7704
+  type: 'test'
+  ...
+# Subtest: generic day expressions expand to weekdays
+ok 68 - generic day expressions expand to weekdays
+  ---
+  duration_ms: 3395.9986
+  type: 'test'
+  ...
+# Subtest: multiple groups in one lesson cell are parsed separately
+ok 69 - multiple groups in one lesson cell are parsed separately
+  ---
+  duration_ms: 13.7806
+  type: 'test'
+  ...
+# Subtest: subject aliases and teacher names normalize canonically
+ok 70 - subject aliases and teacher names normalize canonically
+  ---
+  duration_ms: 1.4356
+  type: 'test'
+  ...
+# Subtest: validation detects duplicates, teacher conflicts, and class conflicts
+ok 71 - validation detects duplicates, teacher conflicts, and class conflicts
+  ---
+  duration_ms: 7.7446
+  type: 'test'
+  ...
+# Subtest: official timetable import is idempotent
+ok 72 - official timetable import is idempotent
+  ---
+  duration_ms: 6280.3583
+  type: 'test'
+  ...
+1..72
+# tests 72
+# suites 0
+# pass 72
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 17555.5714

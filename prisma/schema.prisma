@@ -1,0 +1,338 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  PRINCIPAL
+  TIMETABLE_INCHARGE
+}
+
+enum TeachingLevel {
+  LOWER
+  HIGHER
+  BOTH
+}
+
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LEAVE
+  LATE
+  SHORT_LEAVE
+  PARTIAL_DAY
+}
+
+enum FixtureStatus {
+  DRAFT
+  PUBLISHED
+  CANCELLED
+}
+
+enum WhatsAppStatus {
+  READY
+  OPENED
+  MANUALLY_CONFIRMED
+}
+
+model School {
+  id                    String                  @id @default(cuid())
+  name                  String
+  shortName             String?
+  timezone              String                  @default("Asia/Karachi")
+  academicYear          String
+  periodsPerDay         Int                     @default(8)
+  halfDayBoundaryPeriod Int                     @default(5)
+  users                 SystemUser[]
+  auditLogs             AuditLog[]
+  teachers              Teacher[]
+  subjects              Subject[]
+  classSections         ClassSection[]
+  timetableEntries      MasterTimetable[]
+  dailyAttendances      DailyAttendance[]
+  proxyFixtures         ProxyFixture[]
+  fixtureSummaries      TeacherFixtureSummary[]
+  whatsappNotifications WhatsAppNotification[]
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+
+  @@map("schools")
+}
+
+model Teacher {
+  id                          String                  @id @default(cuid())
+  schoolId                    String
+  name                        String
+  employeeCode                String
+  whatsappNumber              String?
+  subjectSpecializations      String[]                @default([])
+  teachingLevel               TeachingLevel
+  baseWeeklyTeachingPeriods   Int                     @default(0)
+  isActive                    Boolean                 @default(true)
+  createdAt                   DateTime                @default(now())
+  updatedAt                   DateTime                @updatedAt
+  school                      School                  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  timetableEntries            MasterTimetable[]
+  dailyAttendances            DailyAttendance[]
+  absentTeacherFixtures       ProxyFixture[]          @relation("AbsentTeacherFixtures")
+  assignedTeacherFixtures     ProxyFixture[]          @relation("AssignedTeacherFixtures")
+  autoAssignedTeacherFixtures ProxyFixture[]          @relation("AutoAssignedTeacherFixtures")
+  fixtureSummaries            TeacherFixtureSummary[]
+  whatsappNotifications       WhatsAppNotification[]
+
+  @@unique([schoolId, employeeCode])
+  @@index([schoolId, isActive])
+  @@index([schoolId, name])
+  @@map("teachers")
+}
+
+model Subject {
+  id               String            @id @default(cuid())
+  schoolId         String
+  name             String
+  code             String
+  isActive         Boolean           @default(true)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  school           School            @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  timetableEntries MasterTimetable[]
+  proxyFixtures    ProxyFixture[]
+
+  @@unique([schoolId, name])
+  @@unique([schoolId, code])
+  @@index([schoolId, isActive])
+  @@map("subjects")
+}
+
+model ClassSection {
+  id               String            @id @default(cuid())
+  schoolId         String
+  name             String
+  gradeNumber      Int?
+  section          String
+  teachingLevel    TeachingLevel
+  isActive         Boolean           @default(true)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  school           School            @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  timetableEntries MasterTimetable[]
+  proxyFixtures    ProxyFixture[]
+
+  @@unique([schoolId, gradeNumber, section])
+  @@unique([schoolId, name])
+  @@index([schoolId, isActive])
+  @@map("class_sections")
+}
+
+model MasterTimetable {
+  id             String         @id @default(cuid())
+  schoolId       String
+  dayOfWeek      DayOfWeek
+  periodNumber   Int
+  classSectionId String
+  teacherId      String
+  subjectId      String
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  school         School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  classSection   ClassSection   @relation(fields: [classSectionId], references: [id], onDelete: Restrict)
+  teacher        Teacher        @relation(fields: [teacherId], references: [id], onDelete: Restrict)
+  subject        Subject        @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  proxyFixtures  ProxyFixture[]
+
+  @@unique([schoolId, dayOfWeek, periodNumber, classSectionId, teacherId, subjectId])
+  @@unique([schoolId, dayOfWeek, periodNumber, teacherId])
+  @@index([schoolId, dayOfWeek, periodNumber])
+  @@index([teacherId, dayOfWeek])
+  @@index([classSectionId, dayOfWeek])
+  @@map("master_timetable")
+}
+
+model SystemUser {
+  id                 String            @id @default(cuid())
+  schoolId           String
+  school             School            @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  name               String
+  email              String
+  passwordHash       String
+  role               UserRole
+  isActive           Boolean           @default(true)
+  mustChangePassword Boolean           @default(true)
+  lastLoginAt        DateTime?
+  refreshTokens      RefreshToken[]
+  auditLogs          AuditLog[]
+  markedAttendances  DailyAttendance[]
+  overriddenFixtures ProxyFixture[]    @relation("OverriddenFixtures")
+  publishedFixtures  ProxyFixture[]    @relation("PublishedFixtures")
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  @@unique([schoolId, email])
+  @@index([email])
+  @@index([schoolId, role])
+  @@map("system_users")
+}
+
+model DailyAttendance {
+  id                    String           @id @default(cuid())
+  schoolId              String
+  date                  DateTime         @db.Date
+  teacherId             String
+  status                AttendanceStatus
+  availableFromPeriod   Int?
+  unavailableFromPeriod Int?
+  reason                String?
+  notes                 String?
+  remarks               String?
+  markedById            String
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+  school                School           @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  teacher               Teacher          @relation(fields: [teacherId], references: [id], onDelete: Restrict)
+  markedBy              SystemUser       @relation(fields: [markedById], references: [id], onDelete: Restrict)
+
+  @@unique([schoolId, date, teacherId])
+  @@index([schoolId, date, status])
+  @@index([teacherId, date])
+  @@map("daily_attendance")
+}
+
+model ProxyFixture {
+  id                    String                 @id @default(cuid())
+  schoolId              String
+  date                  DateTime               @db.Date
+  periodNumber          Int
+  masterTimetableId     String?
+  classSectionId        String
+  subjectId             String
+  absentTeacherId       String
+  assignedTeacherId     String?
+  assignmentVersion     Int                    @default(1)
+  autoAssignedTeacherId String?
+  status                FixtureStatus          @default(DRAFT)
+  autoScore             Float?
+  scoringDetails        Json?
+  isManuallyOverridden  Boolean                @default(false)
+  overrideReason        String?
+  overriddenById        String?
+  overriddenAt          DateTime?
+  workloadCounted       Boolean                @default(false)
+  requiresReassignment  Boolean                @default(false)
+  reassignmentReason    String?
+  publishedById         String?
+  publishedAt           DateTime?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  school                School                 @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  masterTimetable       MasterTimetable?       @relation(fields: [masterTimetableId], references: [id], onDelete: SetNull)
+  classSection          ClassSection           @relation(fields: [classSectionId], references: [id], onDelete: Restrict)
+  subject               Subject                @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  absentTeacher         Teacher                @relation("AbsentTeacherFixtures", fields: [absentTeacherId], references: [id], onDelete: Restrict)
+  assignedTeacher       Teacher?               @relation("AssignedTeacherFixtures", fields: [assignedTeacherId], references: [id], onDelete: Restrict)
+  autoAssignedTeacher   Teacher?               @relation("AutoAssignedTeacherFixtures", fields: [autoAssignedTeacherId], references: [id], onDelete: Restrict)
+  overriddenBy          SystemUser?            @relation("OverriddenFixtures", fields: [overriddenById], references: [id], onDelete: SetNull)
+  publishedBy           SystemUser?            @relation("PublishedFixtures", fields: [publishedById], references: [id], onDelete: SetNull)
+  whatsappNotifications WhatsAppNotification[]
+
+  @@unique([schoolId, date, masterTimetableId])
+  @@unique([schoolId, date, periodNumber, classSectionId, absentTeacherId])
+  @@index([schoolId, date, status])
+  @@index([schoolId, date, assignedTeacherId])
+  @@index([schoolId, date, periodNumber, assignedTeacherId])
+  @@map("proxy_fixtures")
+}
+
+model WhatsAppNotification {
+  id                  String         @id @default(cuid())
+  schoolId            String
+  fixtureId           String
+  teacherId           String
+  destination         String
+  message             String
+  status              WhatsAppStatus @default(READY)
+  provider            String         @default("click_to_chat")
+  providerMessageId   String?
+  idempotencyKey      String         @unique
+  attemptCount        Int            @default(0)
+  lastAttemptAt       DateTime?
+  sentAt              DateTime?
+  openedAt            DateTime?
+  manuallyConfirmedAt DateTime?
+  failureReason       String?
+  providerResponse    Json?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+  school              School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  fixture             ProxyFixture   @relation(fields: [fixtureId], references: [id], onDelete: Cascade)
+  teacher             Teacher        @relation(fields: [teacherId], references: [id], onDelete: Restrict)
+
+  @@index([schoolId, status])
+  @@index([schoolId, createdAt])
+  @@index([fixtureId])
+  @@index([teacherId])
+  @@map("whatsapp_notifications")
+}
+
+model TeacherFixtureSummary {
+  id           String   @id @default(cuid())
+  schoolId     String
+  teacherId    String
+  year         Int
+  weekNumber   Int
+  fixtureCount Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  school       School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  teacher      Teacher  @relation(fields: [teacherId], references: [id], onDelete: Restrict)
+
+  @@unique([schoolId, teacherId, year, weekNumber])
+  @@index([schoolId, year, weekNumber])
+  @@map("teacher_fixture_summaries")
+}
+
+model RefreshToken {
+  id        String     @id @default(cuid())
+  userId    String
+  user      SystemUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String     @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime   @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model AuditLog {
+  id         String      @id @default(cuid())
+  schoolId   String
+  userId     String?
+  action     String
+  entityType String
+  entityId   String?
+  details    Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime    @default(now())
+  school     School      @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  user       SystemUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([schoolId, createdAt])
+  @@index([userId])
+  @@map("audit_logs")
+}

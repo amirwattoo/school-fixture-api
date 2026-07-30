@@ -1,0 +1,3 @@
+◇ injected env (23) from ..\..\.env // tip: ⌘ enable debugging { debug: true }
+◇ injected env (0) from .env // tip: ⌘ override existing { override: true }
+School Fixture API listening on http://localhost:4000
