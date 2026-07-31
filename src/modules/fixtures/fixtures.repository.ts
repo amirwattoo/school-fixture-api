@@ -42,6 +42,26 @@ export const fixtureInclude = {
   },
 } satisfies Prisma.ProxyFixtureInclude;
 
+type FixtureRecord = Prisma.ProxyFixtureGetPayload<{
+  include: typeof fixtureInclude;
+}>;
+
+const publicationDraftSelect = {
+  id: true,
+  date: true,
+  periodNumber: true,
+  assignmentVersion: true,
+  assignedTeacherId: true,
+  requiresReassignment: true,
+  school: { select: { name: true } },
+  classSection: { select: { name: true } },
+  subject: { select: { name: true } },
+  absentTeacher: { select: { name: true } },
+  assignedTeacher: {
+    select: { id: true, name: true, whatsappNumber: true },
+  },
+} satisfies Prisma.ProxyFixtureSelect;
+
 export const fixturesRepository = {
   database: prisma as FixtureDb,
 
@@ -338,6 +358,56 @@ export const fixturesRepository = {
     return database.proxyFixture.create({
       data,
       include: fixtureInclude,
+    });
+  },
+
+  publicationDrafts(schoolId: string, date: Date) {
+    return prisma.proxyFixture.findMany({
+      where: { schoolId, date, status: "DRAFT" },
+      select: publicationDraftSelect,
+      orderBy: [{ periodNumber: "asc" }, { id: "asc" }],
+    });
+  },
+
+  async publishDrafts(
+    database: FixtureDb,
+    schoolId: string,
+    date: Date,
+    fixtureIds: string[],
+    publishedById: string,
+    publishedAt: Date,
+  ): Promise<Array<{ id: string }>> {
+    if (!fixtureIds.length) return [];
+    return await database.proxyFixture.updateManyAndReturn({
+      where: {
+        id: { in: fixtureIds },
+        schoolId,
+        date,
+        status: "DRAFT",
+      },
+      data: { status: "PUBLISHED", publishedById, publishedAt },
+      select: { id: true },
+    });
+  },
+
+  async publishedFixtures(fixtureIds: string[]): Promise<FixtureRecord[]> {
+    if (!fixtureIds.length) return [];
+    return await prisma.proxyFixture.findMany({
+      where: { id: { in: fixtureIds } },
+      include: fixtureInclude,
+      orderBy: [{ periodNumber: "asc" }, { classSection: { name: "asc" } }],
+    });
+  },
+
+  async createNotificationRecords(
+    database: FixtureDb,
+    data: Prisma.WhatsAppNotificationCreateManyInput[],
+  ): Promise<Array<{ id: string; fixtureId: string; teacherId: string }>> {
+    if (!data.length) return [];
+    return await database.whatsAppNotification.createManyAndReturn({
+      data,
+      skipDuplicates: true,
+      select: { id: true, fixtureId: true, teacherId: true },
     });
   },
 

@@ -25,6 +25,51 @@ import { fixturesRepository, type FixtureDb } from "./fixtures.repository.js";
 const jsonValue = (value: unknown) =>
   JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 
+type PublicationPhase =
+  | "load-draft-fixtures"
+  | "prepare-publication"
+  | "publish-write-transaction"
+  | "audit-write"
+  | "notification-preparation"
+  | "notification-dispatch"
+  | "final-fetch";
+
+const prismaErrorCode = (error: unknown) =>
+  error instanceof Prisma.PrismaClientKnownRequestError ? error.code : null;
+
+const publicationTiming = (requestId: string) => {
+  const requestStartedAt = Date.now();
+  const run = async <T>(
+    phase: PublicationPhase,
+    callback: () => Promise<T> | T,
+    counts?: (result: T) => Record<string, number>,
+  ): Promise<T> => {
+    const phaseStartedAt = Date.now();
+    try {
+      const result = await callback();
+      console.info("[fixture-publication-timing]", {
+        requestId,
+        phase,
+        elapsedMs: Date.now() - phaseStartedAt,
+        totalElapsedMs: Date.now() - requestStartedAt,
+        prismaErrorCode: null,
+        ...(counts?.(result) ?? {}),
+      });
+      return result;
+    } catch (error) {
+      console.error("[fixture-publication-timing]", {
+        requestId,
+        phase,
+        elapsedMs: Date.now() - phaseStartedAt,
+        totalElapsedMs: Date.now() - requestStartedAt,
+        prismaErrorCode: prismaErrorCode(error),
+      });
+      throw error;
+    }
+  };
+  return { run };
+};
+
 const fixtureLectureKey = (fixture: {
   periodNumber: number;
   classSectionId: string;
@@ -640,143 +685,168 @@ export const fixturesService = {
     });
   },
 
-  async publish(actor: AuditActor, dateValue: string) {
+  async publish(actor: AuditActor, dateValue: string, requestId: string) {
     const date = parseDateOnly(dateValue);
-    const publication = await runSerializable(async (database) => {
-      const drafts = await database.proxyFixture.findMany({
-        where: { schoolId: actor.schoolId, date, status: "DRAFT" },
-        include: {
-          school: { select: { name: true } },
-          classSection: { select: { name: true } },
-          subject: { select: { name: true } },
-          absentTeacher: { select: { name: true } },
-          assignedTeacher: {
-            select: { id: true, name: true, whatsappNumber: true },
-          },
-        },
-      });
-      if (drafts.some((fixture) => !fixture.assignedTeacherId)) {
-        throw new ApiError(
-          409,
-          "UNASSIGNED_FIXTURES",
-          "Assign every draft fixture before publishing",
-        );
-      }
-      if (drafts.some((fixture) => fixture.requiresReassignment)) {
-        throw new ApiError(
-          409,
-          "FIXTURES_REQUIRE_REASSIGNMENT",
-          "Reassign fixtures affected by attendance changes before publishing",
-        );
-      }
-      const publishedAt = new Date();
-      await database.proxyFixture.updateMany({
-        where: { schoolId: actor.schoolId, date, status: "DRAFT" },
-        data: {
-          status: "PUBLISHED",
-          publishedById: actor.userId,
-          publishedAt,
-        },
-      });
-      await audit(
-        database,
-        actor,
-        "FIXTURES_PUBLISHED",
-        "ProxyFixture",
-        undefined,
-        { date: dateValue, fixtureIds: drafts.map((fixture) => fixture.id) },
-      );
-      const notificationIds: string[] = [];
-      let notificationsCreated = 0;
-      let existingNotifications = 0;
-      for (const fixture of drafts) {
-        const assignedTeacher = fixture.assignedTeacher!;
-        const idempotencyKey = fixtureNotificationIdempotencyKey(
-          fixture.id,
-          assignedTeacher.id,
-          fixture.assignmentVersion,
-        );
-        const existing = await database.whatsAppNotification.findUnique({
-          where: { idempotencyKey },
-          select: { id: true },
-        });
-        if (existing) {
-          existingNotifications += 1;
-          continue;
+    const timing = publicationTiming(requestId);
+    const drafts = await timing.run(
+      "load-draft-fixtures",
+      () => fixturesRepository.publicationDrafts(actor.schoolId, date),
+      (result) => ({ draftCount: result.length }),
+    );
+    const fixtureIds = await timing.run(
+      "prepare-publication",
+      () => {
+        if (drafts.some((fixture) => !fixture.assignedTeacherId)) {
+          throw new ApiError(
+            409,
+            "UNASSIGNED_FIXTURES",
+            "Assign every draft fixture before publishing",
+          );
         }
-        const rendered = renderFixtureWhatsAppMessage({
-          schoolName: fixture.school.name,
-          teacherName: assignedTeacher.name,
-          fixtureDate: fixture.date,
-          periodNumber: fixture.periodNumber,
-          className: fixture.classSection.name,
-          subjectName: fixture.subject.name,
-          absentTeacherName: fixture.absentTeacher.name,
-        });
-        let destination = assignedTeacher.whatsappNumber?.trim() ?? "";
-        try {
-          destination =
-            normalizePakistaniWhatsAppNumber(assignedTeacher.whatsappNumber) ??
-            "";
-        } catch {
-          // Keep the entered value so the Click-to-Chat UI can show a
-          // teacher-specific invalid-number error without blocking publication.
+        if (drafts.some((fixture) => fixture.requiresReassignment)) {
+          throw new ApiError(
+            409,
+            "FIXTURES_REQUIRE_REASSIGNMENT",
+            "Reassign fixtures affected by attendance changes before publishing",
+          );
         }
-        const notification = await database.whatsAppNotification.create({
-          data: {
+        return drafts.map((fixture) => fixture.id);
+      },
+      (result) => ({ fixtureCount: result.length }),
+    );
+    const notificationData = await timing.run(
+      "notification-preparation",
+      () =>
+        drafts.map((fixture) => {
+          const assignedTeacher = fixture.assignedTeacher!;
+          const rendered = renderFixtureWhatsAppMessage({
+            schoolName: fixture.school.name,
+            teacherName: assignedTeacher.name,
+            fixtureDate: fixture.date,
+            periodNumber: fixture.periodNumber,
+            className: fixture.classSection.name,
+            subjectName: fixture.subject.name,
+            absentTeacherName: fixture.absentTeacher.name,
+          });
+          let destination = assignedTeacher.whatsappNumber?.trim() ?? "";
+          try {
+            destination =
+              normalizePakistaniWhatsAppNumber(
+                assignedTeacher.whatsappNumber,
+              ) ?? "";
+          } catch {
+            // Preserve the entered value so Click-to-Chat can report an
+            // invalid number without blocking publication.
+          }
+          return {
             schoolId: actor.schoolId,
             fixtureId: fixture.id,
             teacherId: assignedTeacher.id,
             destination,
             message: rendered.message,
             provider: "click_to_chat",
-            idempotencyKey,
-          },
+            idempotencyKey: fixtureNotificationIdempotencyKey(
+              fixture.id,
+              assignedTeacher.id,
+              fixture.assignmentVersion,
+            ),
+          } satisfies Prisma.WhatsAppNotificationCreateManyInput;
+        }),
+      (result) => ({ notificationCount: result.length }),
+    );
+    const publishedIds = await timing.run(
+      "publish-write-transaction",
+      () =>
+        fixturesRepository.writeTransaction(async (database) => {
+          const published = await fixturesRepository.publishDrafts(
+            database,
+            actor.schoolId,
+            date,
+            fixtureIds,
+            actor.userId,
+            new Date(),
+          );
+          const ids = published.map((fixture) => fixture.id);
+          await timing.run("audit-write", () =>
+            fixturesRepository.createAuditRecords(
+              database,
+              ids.length
+                ? [
+                    {
+                      schoolId: actor.schoolId,
+                      userId: actor.userId,
+                      action: "FIXTURES_PUBLISHED",
+                      entityType: "ProxyFixture",
+                      details: jsonValue({ date: dateValue, fixtureIds: ids }),
+                    },
+                  ]
+                : [],
+            ),
+          );
+          return ids;
+        }),
+      (result) => ({ publishedCount: result.length }),
+    );
+    const publishedIdSet = new Set(publishedIds);
+    const notificationsForPublishedFixtures = notificationData.filter(
+      (notification) => publishedIdSet.has(notification.fixtureId),
+    );
+    // READY records are persisted only after fixture publication commits.
+    // Click-to-Chat does not automatically invoke a provider; any future
+    // network dispatch must also remain outside these database transactions.
+    const notificationResult = await timing
+      .run(
+        "notification-dispatch",
+        () =>
+          fixturesRepository.writeTransaction(async (database) => {
+            const created = await fixturesRepository.createNotificationRecords(
+              database,
+              notificationsForPublishedFixtures,
+            );
+            await fixturesRepository.createAuditRecords(
+              database,
+              created.map((notification) => ({
+                schoolId: actor.schoolId,
+                userId: actor.userId,
+                action: "WHATSAPP_NOTIFICATION_CREATED",
+                entityType: "WhatsAppNotification",
+                entityId: notification.id,
+                details: jsonValue({
+                  notificationId: notification.id,
+                  fixtureId: notification.fixtureId,
+                  teacherId: notification.teacherId,
+                  provider: "click_to_chat",
+                  attemptCount: 0,
+                }),
+              })),
+            );
+            return { completed: true, createdCount: created.length };
+          }),
+        (result) => ({ notificationsCreated: result.createdCount }),
+      )
+      .catch((error: unknown) => {
+        console.error("[fixture-publication-notification-failure]", {
+          requestId,
+          prismaErrorCode: prismaErrorCode(error),
         });
-        notificationIds.push(notification.id);
-        notificationsCreated += 1;
-        await audit(
-          database,
-          actor,
-          "WHATSAPP_NOTIFICATION_CREATED",
-          "WhatsAppNotification",
-          notification.id,
-          {
-            notificationId: notification.id,
-            fixtureId: fixture.id,
-            teacherId: assignedTeacher.id,
-            provider: "click_to_chat",
-            attemptCount: 0,
-          },
-        );
-      }
-      const fixtures = await database.proxyFixture.findMany({
-        where: { id: { in: drafts.map((fixture) => fixture.id) } },
-        include: {
-          classSection: true,
-          subject: true,
-          absentTeacher: true,
-          assignedTeacher: true,
-          autoAssignedTeacher: true,
-        },
-        orderBy: [{ periodNumber: "asc" }, { classSection: { name: "asc" } }],
+        return { completed: false, createdCount: 0 };
       });
-      return {
-        fixtures,
-        notificationIds,
-        publishedCount: drafts.length,
-        notificationsCreated,
-        existingNotifications,
-      };
-    });
+    const fixtures = await timing.run(
+      "final-fetch",
+      () => fixturesRepository.publishedFixtures(publishedIds),
+      (result) => ({ fixtureCount: result.length }),
+    );
     return {
-      fixtures: publication.fixtures,
-      publishedCount: publication.publishedCount,
-      notificationsCreated: publication.notificationsCreated,
-      messagesReady: publication.notificationIds.length,
+      fixtures,
+      publishedCount: publishedIds.length,
+      notificationsCreated: notificationResult.createdCount,
+      messagesReady: notificationResult.createdCount,
       messagesSent: 0,
       messagesFailed: 0,
-      existingNotifications: publication.existingNotifications,
+      existingNotifications: notificationResult.completed
+        ? notificationsForPublishedFixtures.length -
+          notificationResult.createdCount
+        : 0,
     };
   },
 };

@@ -10,6 +10,7 @@ import {
   fixtureNotificationIdempotencyKey,
   renderFixtureWhatsAppMessage,
 } from "../src/modules/whatsapp/whatsapp-message.service.js";
+import { fixturesRepository } from "../src/modules/fixtures/fixtures.repository.js";
 import {
   buildWhatsAppClickToChatUrl,
   isValidE164Number,
@@ -308,6 +309,10 @@ test("publication creates READY notifications without mock delivery", async () =
     body: JSON.stringify({ date: DATE }),
   });
   assert.equal(published.response.status, 200);
+  assert.match(
+    published.response.headers.get("x-request-id") ?? "",
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+  );
   assert.deepEqual(
     {
       publishedCount: published.body.data?.publishedCount,
@@ -342,6 +347,21 @@ test("publication creates READY notifications without mock delivery", async () =
     _count: true,
   });
   assert.equal(statuses.find((item) => item.status === "READY")?._count, 4);
+  assert.equal(
+    await prisma.auditLog.count({
+      where: { schoolId: SCHOOL_ID, action: "FIXTURES_PUBLISHED" },
+    }),
+    1,
+  );
+  assert.equal(
+    await prisma.auditLog.count({
+      where: {
+        schoolId: SCHOOL_ID,
+        action: "WHATSAPP_NOTIFICATION_CREATED",
+      },
+    }),
+    4,
+  );
   const workloadAfter = await prisma.teacherFixtureSummary.aggregate({
     where: { schoolId: SCHOOL_ID },
     _sum: { fixtureCount: true },
@@ -378,6 +398,12 @@ test("duplicate publication creates no duplicate notifications", async () => {
   const before = await prisma.whatsAppNotification.count({
     where: { schoolId: SCHOOL_ID },
   });
+  const auditsBefore = await prisma.auditLog.count({
+    where: {
+      schoolId: SCHOOL_ID,
+      action: { in: ["FIXTURES_PUBLISHED", "WHATSAPP_NOTIFICATION_CREATED"] },
+    },
+  });
   const repeated = await request<{
     publishedCount: number;
     notificationsCreated: number;
@@ -394,6 +420,67 @@ test("duplicate publication creates no duplicate notifications", async () => {
       where: { schoolId: SCHOOL_ID },
     }),
     before,
+  );
+  assert.equal(
+    await prisma.auditLog.count({
+      where: {
+        schoolId: SCHOOL_ID,
+        action: {
+          in: ["FIXTURES_PUBLISHED", "WHATSAPP_NOTIFICATION_CREATED"],
+        },
+      },
+    }),
+    auditsBefore,
+  );
+});
+
+test("notification persistence failure does not roll back publication", async () => {
+  const source = await prisma.proxyFixture.findFirstOrThrow({
+    where: { schoolId: SCHOOL_ID },
+  });
+  const fixture = await prisma.proxyFixture.create({
+    data: {
+      schoolId: SCHOOL_ID,
+      date: parseDateOnly("2026-08-11"),
+      periodNumber: 1,
+      classSectionId: source.classSectionId,
+      subjectId: source.subjectId,
+      absentTeacherId: source.absentTeacherId,
+      assignedTeacherId: ids.get("VALID")!,
+      autoAssignedTeacherId: ids.get("VALID")!,
+      workloadCounted: true,
+    },
+  });
+  const createNotifications = fixturesRepository.createNotificationRecords;
+  fixturesRepository.createNotificationRecords = async () => {
+    throw new Error("simulated post-commit notification failure");
+  };
+  try {
+    const result = await request<{
+      publishedCount: number;
+      notificationsCreated: number;
+    }>("/api/v1/fixtures/publish", {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ date: "2026-08-11" }),
+    });
+    assert.equal(result.response.status, 200);
+    assert.equal(result.body.data?.publishedCount, 1);
+    assert.equal(result.body.data?.notificationsCreated, 0);
+  } finally {
+    fixturesRepository.createNotificationRecords = createNotifications;
+  }
+  assert.equal(
+    (
+      await prisma.proxyFixture.findUniqueOrThrow({ where: { id: fixture.id } })
+    ).status,
+    "PUBLISHED",
+  );
+  assert.equal(
+    await prisma.whatsAppNotification.count({
+      where: { fixtureId: fixture.id },
+    }),
+    0,
   );
 });
 
