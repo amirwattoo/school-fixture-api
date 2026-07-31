@@ -1,9 +1,10 @@
-import type { DayOfWeek, Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type DayOfWeek, type PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../prisma/client.js";
 
 export type FixtureDb = Pick<
   PrismaClient,
+  | "$executeRaw"
   | "auditLog"
   | "dailyAttendance"
   | "masterTimetable"
@@ -47,8 +48,16 @@ export const fixturesRepository = {
   transaction<T>(callback: (transaction: FixtureDb) => Promise<T>) {
     return prisma.$transaction(callback, {
       isolationLevel: "Serializable",
-      maxWait: 15000,
-      timeout: 60000,
+      maxWait: 5000,
+      timeout: 10000,
+    });
+  },
+
+  writeTransaction<T>(callback: (transaction: FixtureDb) => Promise<T>) {
+    return prisma.$transaction(callback, {
+      isolationLevel: "ReadCommitted",
+      maxWait: 5000,
+      timeout: 5000,
     });
   },
 
@@ -113,10 +122,16 @@ export const fixturesRepository = {
   ) {
     return database.masterTimetable.findMany({
       where: { schoolId, dayOfWeek, teacherId: { in: teacherIds } },
-      include: {
-        teacher: true,
-        subject: true,
-        classSection: true,
+      select: {
+        id: true,
+        periodNumber: true,
+        classSectionId: true,
+        teacherId: true,
+        subjectId: true,
+        subject: { select: { name: true, code: true } },
+        classSection: {
+          select: { name: true, teachingLevel: true },
+        },
       },
       orderBy: [{ periodNumber: "asc" }, { classSection: { name: "asc" } }],
     });
@@ -180,7 +195,13 @@ export const fixturesRepository = {
       where: {
         schoolId,
       },
-      include: {
+      select: {
+        id: true,
+        name: true,
+        isActive: true,
+        baseWeeklyTeachingPeriods: true,
+        subjectSpecializations: true,
+        teachingLevel: true,
         dailyAttendances: {
           where: { schoolId, date },
           select: {
@@ -318,6 +339,70 @@ export const fixturesRepository = {
       data,
       include: fixtureInclude,
     });
+  },
+
+  createManyForGeneration(
+    database: FixtureDb,
+    data: Prisma.ProxyFixtureCreateManyInput[],
+  ) {
+    if (!data.length) return Promise.resolve([]);
+    return database.proxyFixture.createManyAndReturn({
+      data,
+      skipDuplicates: true,
+      select: {
+        id: true,
+        masterTimetableId: true,
+        assignedTeacherId: true,
+        periodNumber: true,
+      },
+    });
+  },
+
+  async incrementSummariesBulk(
+    database: FixtureDb,
+    schoolId: string,
+    year: number,
+    weekNumber: number,
+    increments: Array<{ teacherId: string; count: number }>,
+  ) {
+    if (!increments.length) return;
+    await database.teacherFixtureSummary.createMany({
+      data: increments.map(({ teacherId }) => ({
+        schoolId,
+        teacherId,
+        year,
+        weekNumber,
+        fixtureCount: 0,
+      })),
+      skipDuplicates: true,
+    });
+    const cases = Prisma.join(
+      increments.map(
+        ({ teacherId, count }) => Prisma.sql`WHEN ${teacherId} THEN ${count}`,
+      ),
+      " ",
+    );
+    const teacherIds = Prisma.join(
+      increments.map(({ teacherId }) => teacherId),
+    );
+    await database.$executeRaw(Prisma.sql`
+      UPDATE "teacher_fixture_summaries"
+      SET
+        "fixtureCount" = "fixtureCount" + CASE "teacherId" ${cases} ELSE 0 END,
+        "updatedAt" = CURRENT_TIMESTAMP
+      WHERE "schoolId" = ${schoolId}
+        AND "year" = ${year}
+        AND "weekNumber" = ${weekNumber}
+        AND "teacherId" IN (${teacherIds})
+    `);
+  },
+
+  createAuditRecords(
+    database: FixtureDb,
+    data: Prisma.AuditLogCreateManyInput[],
+  ) {
+    if (!data.length) return Promise.resolve({ count: 0 });
+    return database.auditLog.createMany({ data });
   },
 
   findForUpdate(database: FixtureDb, schoolId: string, fixtureId: string) {

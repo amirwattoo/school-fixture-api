@@ -76,6 +76,30 @@ const runSerializable = async <T>(
   throw new ApiError(409, "FIXTURE_TRANSACTION_CONFLICT", "Please try again");
 };
 
+const runFixtureWrite = async <T>(
+  callback: (database: FixtureDb) => Promise<T>,
+): Promise<T> => {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await fixturesRepository.writeTransaction(callback);
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        (error.code === "P2034" || error.code === "P2002")
+      ) {
+        if (attempt < 3) continue;
+        throw new ApiError(
+          409,
+          "FIXTURE_WRITE_CONFLICT",
+          "Another fixture generation request changed the same lessons; please retry",
+        );
+      }
+      throw error;
+    }
+  }
+  throw new ApiError(409, "FIXTURE_WRITE_CONFLICT", "Please retry");
+};
+
 export type FixtureGenerationDiagnostics = {
   selectedDate: string;
   resolvedWeekday: string;
@@ -107,14 +131,19 @@ export const fixturesService = {
   ) {
     const database = fixturesRepository.database;
     const startedAt = Date.now();
-    const logTiming = (stage: string) => {
-      if (env.FIXTURE_DEBUG_TIMING || env.NODE_ENV === "development") {
+    let previousTimingAt = startedAt;
+    const logTiming = (stage: string, counts?: Record<string, number>) => {
+      if (env.PERF_LOGGING || env.FIXTURE_DEBUG_TIMING) {
+        const now = Date.now();
         console.info("[fixture-generation-timing]", {
           stage,
-          elapsedMs: Date.now() - startedAt,
+          stageMs: now - previousTimingAt,
+          elapsedMs: now - startedAt,
           schoolId: actor.schoolId,
           selectedDate: dateValue,
+          ...counts,
         });
+        previousTimingAt = now;
       }
     };
     const school = await fixturesRepository.schoolSettings(
@@ -168,7 +197,12 @@ export const fixturesService = {
           dayOfWeek,
         }),
       ]);
-    logTiming("bulk-reads-complete");
+    logTiming("bulk-reads-complete", {
+      absentTeachers: teachers.length,
+      attendanceRecords: attendance.length,
+      matchingLectures: matchingLectures.length,
+      eligibleTeacherPool: snapshot.pool.length,
+    });
       if (env.NODE_ENV === "development") {
         const diagnosticById = new Map(
           diagnosticTeachers.map((teacher) => [teacher.id, teacher]),
@@ -278,25 +312,13 @@ export const fixturesService = {
         },
       }];
     });
-    logTiming("scoring-complete");
+    logTiming("scoring-complete", { plannedFixtures: prepared.length });
 
-    return runSerializable(async (transaction) => {
-      const committedExisting = await fixturesRepository.existingForLectures(
+    const { year, weekNumber } = isoWeek(date);
+    const writeResult = await runFixtureWrite(async (transaction) => {
+      const createdFixtures = await fixturesRepository.createManyForGeneration(
         transaction,
-        actor.schoolId,
-        date,
-        lectures,
-      );
-      const committedByLectureId = new Map(
-        committedExisting.map((fixture) => [
-          fixtureLectureKey(fixture),
-          fixture,
-        ]),
-      );
-      const createdFixtures = [];
-      for (const plan of prepared) {
-        if (committedByLectureId.has(fixtureLectureKey(plan.lecture))) continue;
-        const fixture = await fixturesRepository.create(transaction, {
+        prepared.map((plan) => ({
           schoolId: actor.schoolId,
           date,
           periodNumber: plan.lecture.periodNumber,
@@ -309,61 +331,40 @@ export const fixturesService = {
           autoScore: plan.selected?.totalScore,
           scoringDetails: jsonValue(plan.scoringDetails),
           workloadCounted: Boolean(plan.selected),
-        });
-        createdFixtures.push(fixture);
-        if (plan.selected) {
-          const { year, weekNumber } = isoWeek(date);
-          await fixturesRepository.incrementSummary(
-            transaction,
-            actor.schoolId,
-            plan.selected.teacherId,
-            year,
-            weekNumber,
-          );
-          await audit(
-            transaction,
-            actor,
-            "FIXTURE_AUTO_ASSIGNED",
-            "ProxyFixture",
-            fixture.id,
-            {
-              assignedTeacherId: plan.selected.teacherId,
-              score: plan.selected.totalScore,
-            },
-          );
-        } else {
-          await audit(
-            transaction,
-            actor,
-            "FIXTURE_UNASSIGNED",
-            "ProxyFixture",
-            fixture.id,
-            { periodNumber: plan.lecture.periodNumber },
-          );
-        }
-      }
-      const fixturesByLectureId = new Map(
-        [...committedExisting, ...createdFixtures].map((fixture) => [
-          fixtureLectureKey(fixture),
-          fixture,
-        ]),
+        })),
       );
-      const fixtures = lectures.flatMap((lecture) => {
-        const fixture = fixturesByLectureId.get(fixtureLectureKey(lecture));
-        return fixture ? [fixture] : [];
-      });
+      const planByTimetableId = new Map(
+        prepared.map((plan) => [plan.lecture.id, plan]),
+      );
+      const summaryCounts = new Map<string, number>();
+      for (const fixture of createdFixtures) {
+        if (!fixture.assignedTeacherId) continue;
+        summaryCounts.set(
+          fixture.assignedTeacherId,
+          (summaryCounts.get(fixture.assignedTeacherId) ?? 0) + 1,
+        );
+      }
+      await fixturesRepository.incrementSummariesBulk(
+        transaction,
+        actor.schoolId,
+        year,
+        weekNumber,
+        [...summaryCounts].map(([teacherId, count]) => ({ teacherId, count })),
+      );
+
       const createdFixtureCount = createdFixtures.length;
-      const existingFixtureCount = fixtures.length - createdFixtureCount;
+      const existingFixtureCount = lectures.length - createdFixtureCount;
       const fixturesWithoutEligibleReplacementCount = createdFixtures.filter(
         (fixture) => !fixture.assignedTeacherId,
       ).length;
+      const writeSkippedReasons = [...skippedReasons];
       if (existingFixtureCount > 0) {
-        skippedReasons.push(
+        writeSkippedReasons.push(
           `${existingFixtureCount} existing fixture(s), including published fixtures, were returned without creating duplicates`,
         );
       }
-      if (fixtures.length === 0 && skippedReasons.length === 0) {
-        skippedReasons.push("No affected timetable periods were found");
+      if (lectures.length === 0 && writeSkippedReasons.length === 0) {
+        writeSkippedReasons.push("No affected timetable periods were found");
       }
       const diagnostics: FixtureGenerationDiagnostics = {
         selectedDate: resolvedDate.selectedDate,
@@ -374,26 +375,83 @@ export const fixturesService = {
         createdFixtureCount,
         existingFixtureCount,
         fixturesWithoutEligibleReplacementCount,
-        skippedReasons,
+        skippedReasons: writeSkippedReasons,
       };
-      await audit(
-        transaction,
-        actor,
-        "FIXTURES_GENERATED",
-        "ProxyFixture",
-        undefined,
+      const assignmentAudits: Prisma.AuditLogCreateManyInput[] =
+        createdFixtures.map((fixture) => {
+          const plan = fixture.masterTimetableId
+            ? planByTimetableId.get(fixture.masterTimetableId)
+            : undefined;
+          return {
+            schoolId: actor.schoolId,
+            userId: actor.userId,
+            action: fixture.assignedTeacherId
+              ? "FIXTURE_AUTO_ASSIGNED"
+              : "FIXTURE_UNASSIGNED",
+            entityType: "ProxyFixture",
+            entityId: fixture.id,
+            details: fixture.assignedTeacherId
+              ? jsonValue({
+                  assignedTeacherId: fixture.assignedTeacherId,
+                  score: plan?.selected?.totalScore ?? null,
+                })
+              : jsonValue({ periodNumber: fixture.periodNumber }),
+          };
+        });
+      await fixturesRepository.createAuditRecords(transaction, [
+        ...assignmentAudits,
         {
-          date: dateValue,
-          absentTeacherIds,
-          fixtureIds: fixtures.map((fixture) => fixture.id),
-          diagnostics,
+          schoolId: actor.schoolId,
+          userId: actor.userId,
+          action: "FIXTURES_GENERATED",
+          entityType: "ProxyFixture",
+          details: jsonValue({
+            date: dateValue,
+            absentTeacherIds,
+            fixtureIds: [
+              ...existingFixtures.map((fixture) => fixture.id),
+              ...createdFixtures.map((fixture) => fixture.id),
+            ],
+            affectedMasterTimetableIds: lectures.map((lecture) => lecture.id),
+            diagnostics,
+          }),
         },
-      );
+      ]);
       return {
-        fixtures,
+        createdFixtureIds: createdFixtures.map((fixture) => fixture.id),
         diagnostics,
       };
     });
+    logTiming("write-transaction-complete", {
+      createdFixtures: writeResult.createdFixtureIds.length,
+    });
+
+    const fixtures = await fixturesRepository.existingForLectures(
+      database,
+      actor.schoolId,
+      date,
+      lectures,
+    );
+    const fixturesByLectureId = new Map(
+      fixtures.map((fixture) => [fixtureLectureKey(fixture), fixture]),
+    );
+    const orderedFixtures = lectures.flatMap((lecture) => {
+      const fixture = fixturesByLectureId.get(fixtureLectureKey(lecture));
+      return fixture ? [fixture] : [];
+    });
+    if (orderedFixtures.length !== lectures.length) {
+      throw new ApiError(
+        409,
+        "FIXTURE_WRITE_CONFLICT",
+        "Not every affected lesson could be saved; please retry",
+      );
+    }
+    logTiming("result-hydration-complete", { fixtures: orderedFixtures.length });
+    logTiming("complete");
+    return {
+      fixtures: orderedFixtures,
+      diagnostics: writeResult.diagnostics,
+    };
   },
 
   async override(

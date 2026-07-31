@@ -25,6 +25,10 @@ const envSchema = z
       .enum(["true", "false"])
       .default("false")
       .transform((value) => value === "true"),
+    PERF_LOGGING: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
     WHATSAPP_PROVIDER: z.enum(["mock", "meta"]).default("mock"),
     WHATSAPP_ACCESS_TOKEN: z.string().optional().default(""),
     WHATSAPP_PHONE_NUMBER_ID: z.string().optional().default(""),

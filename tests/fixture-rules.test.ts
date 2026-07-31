@@ -9,6 +9,10 @@ import {
 import { attendanceService } from "../src/modules/attendance/attendance.service.js";
 import { updateAttendanceSchema } from "../src/modules/attendance/attendance.schemas.js";
 import { getEligibleTeachersForFixture } from "../src/modules/fixtures/fixture-eligibility.service.js";
+import {
+  fixturesRepository,
+  type FixtureDb,
+} from "../src/modules/fixtures/fixtures.repository.js";
 import { fixturesService } from "../src/modules/fixtures/fixtures.service.js";
 import {
   sortCandidates,
@@ -620,6 +624,73 @@ test("zero fixture generation returns actionable diagnostics", async () => {
       "No MONDAY timetable periods matched the selected unavailable teachers",
     ],
   });
+});
+
+test("generation performs bulk eligibility reads outside its short write transaction", async () => {
+  const originalWriteTransaction = fixturesRepository.writeTransaction;
+  const originalEligibilityPool = fixturesRepository.eligibilityPool;
+  const originalRegularBusyPeriods = fixturesRepository.regularBusyPeriods;
+  const originalFixtureBusyPeriods = fixturesRepository.fixtureBusyPeriods;
+  const originalSummariesForWeek = fixturesRepository.summariesForWeek;
+  const originalExistingForLectures = fixturesRepository.existingForLectures;
+  let insideWriteTransaction = false;
+  let writeTransactionCalls = 0;
+  const assertReadIsOutsideWriteTransaction = () =>
+    assert.equal(
+      insideWriteTransaction,
+      false,
+      "fixture generation attempted a read-heavy query inside its write transaction",
+    );
+
+  fixturesRepository.writeTransaction = async <T>(
+    callback: (database: FixtureDb) => Promise<T>,
+  ) => {
+    writeTransactionCalls += 1;
+    return originalWriteTransaction(async (database) => {
+      insideWriteTransaction = true;
+      try {
+        return await callback(database);
+      } finally {
+        insideWriteTransaction = false;
+      }
+    });
+  };
+  fixturesRepository.eligibilityPool = (...args) => {
+    assertReadIsOutsideWriteTransaction();
+    return originalEligibilityPool(...args);
+  };
+  fixturesRepository.regularBusyPeriods = (...args) => {
+    assertReadIsOutsideWriteTransaction();
+    return originalRegularBusyPeriods(...args);
+  };
+  fixturesRepository.fixtureBusyPeriods = (...args) => {
+    assertReadIsOutsideWriteTransaction();
+    return originalFixtureBusyPeriods(...args);
+  };
+  fixturesRepository.summariesForWeek = (...args) => {
+    assertReadIsOutsideWriteTransaction();
+    return originalSummariesForWeek(...args);
+  };
+  fixturesRepository.existingForLectures = (...args) => {
+    assertReadIsOutsideWriteTransaction();
+    return originalExistingForLectures(...args);
+  };
+
+  try {
+    await fixturesService.generate(
+      { schoolId: SCHOOL_ID, userId: ids.get("USER")! },
+      "2026-08-03",
+      [ids.get("ABSENT")!],
+    );
+    assert.equal(writeTransactionCalls, 1);
+  } finally {
+    fixturesRepository.writeTransaction = originalWriteTransaction;
+    fixturesRepository.eligibilityPool = originalEligibilityPool;
+    fixturesRepository.regularBusyPeriods = originalRegularBusyPeriods;
+    fixturesRepository.fixtureBusyPeriods = originalFixtureBusyPeriods;
+    fixturesRepository.summariesForWeek = originalSummariesForWeek;
+    fixturesRepository.existingForLectures = originalExistingForLectures;
+  }
 });
 
 test("override eligibility excludes teachers outside a partial-day range", async () => {

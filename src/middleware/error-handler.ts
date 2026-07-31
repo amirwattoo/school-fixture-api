@@ -46,6 +46,16 @@ export const errorHandler: ErrorRequestHandler = (
         code: "DUPLICATE_RECORD",
         message: "The requested record already exists",
       },
+      P2003: {
+        status: 409,
+        code: "RELATED_RECORD_CHANGED",
+        message: "A related record changed or no longer exists; refresh and retry",
+      },
+      P2025: {
+        status: 404,
+        code: "RECORD_NOT_FOUND",
+        message: "The requested record was not found",
+      },
       P2024: {
         status: 503,
         code: "DATABASE_BUSY",

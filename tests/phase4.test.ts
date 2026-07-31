@@ -266,7 +266,7 @@ test("date-only utilities avoid timezone shifts and calculate boundaries", () =>
 test("a real write failure rolls back every earlier write in the transaction", async () => {
   const action = "ROLLBACK_TEST_AUDIT";
   await assert.rejects(() =>
-    fixturesRepository.transaction(async (transaction) => {
+    fixturesRepository.writeTransaction(async (transaction) => {
       await transaction.auditLog.create({
         data: {
           schoolId: SCHOOL_ID,
