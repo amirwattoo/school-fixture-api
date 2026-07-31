@@ -157,6 +157,8 @@ model MasterTimetable {
   @@unique([schoolId, dayOfWeek, periodNumber, classSectionId, teacherId, subjectId])
   @@unique([schoolId, dayOfWeek, periodNumber, teacherId])
   @@index([schoolId, dayOfWeek, periodNumber])
+  @@index([schoolId, teacherId, dayOfWeek, periodNumber])
+  @@index([schoolId, classSectionId, dayOfWeek, periodNumber])
   @@index([teacherId, dayOfWeek])
   @@index([classSectionId, dayOfWeek])
   @@map("master_timetable")
@@ -207,6 +209,7 @@ model DailyAttendance {
 
   @@unique([schoolId, date, teacherId])
   @@index([schoolId, date, status])
+  @@index([schoolId, teacherId, date])
   @@index([teacherId, date])
   @@map("daily_attendance")
 }
@@ -253,6 +256,7 @@ model ProxyFixture {
   @@index([schoolId, date, status])
   @@index([schoolId, date, assignedTeacherId])
   @@index([schoolId, date, periodNumber, assignedTeacherId])
+  @@index([schoolId, assignedTeacherId, date, status])
   @@map("proxy_fixtures")
 }
 

@@ -21,6 +21,10 @@ const envSchema = z
     NODE_ENV: z
       .enum(["development", "test", "production"])
       .default("development"),
+    FIXTURE_DEBUG_TIMING: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
     WHATSAPP_PROVIDER: z.enum(["mock", "meta"]).default("mock"),
     WHATSAPP_ACCESS_TOKEN: z.string().optional().default(""),
     WHATSAPP_PHONE_NUMBER_ID: z.string().optional().default(""),

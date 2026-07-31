@@ -1,8 +1,18 @@
-import type { DayOfWeek, Prisma } from "@prisma/client";
+import type { DayOfWeek, Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../prisma/client.js";
 
-export type FixtureDb = Prisma.TransactionClient;
+export type FixtureDb = Pick<
+  PrismaClient,
+  | "auditLog"
+  | "dailyAttendance"
+  | "masterTimetable"
+  | "proxyFixture"
+  | "school"
+  | "teacher"
+  | "teacherFixtureSummary"
+  | "whatsAppNotification"
+>;
 
 export const fixtureInclude = {
   classSection: {
@@ -32,6 +42,8 @@ export const fixtureInclude = {
 } satisfies Prisma.ProxyFixtureInclude;
 
 export const fixturesRepository = {
+  database: prisma as FixtureDb,
+
   transaction<T>(callback: (transaction: FixtureDb) => Promise<T>) {
     return prisma.$transaction(callback, {
       isolationLevel: "Serializable",
@@ -134,6 +146,35 @@ export const fixturesRepository = {
     });
   },
 
+  existingForLectures(
+    database: FixtureDb,
+    schoolId: string,
+    date: Date,
+    lectures: Array<{
+      id: string;
+      periodNumber: number;
+      classSectionId: string;
+      teacherId: string;
+    }>,
+  ) {
+    if (!lectures.length) return Promise.resolve([]);
+    return database.proxyFixture.findMany({
+      where: {
+        schoolId,
+        date,
+        OR: [
+          { masterTimetableId: { in: lectures.map((lecture) => lecture.id) } },
+          ...lectures.map((lecture) => ({
+            periodNumber: lecture.periodNumber,
+            classSectionId: lecture.classSectionId,
+            absentTeacherId: lecture.teacherId,
+          })),
+        ],
+      },
+      include: fixtureInclude,
+    });
+  },
+
   eligibilityPool(database: FixtureDb, schoolId: string, date: Date) {
     return database.teacher.findMany({
       where: {
@@ -165,6 +206,17 @@ export const fixturesRepository = {
     });
   },
 
+  regularBusyPeriods(
+    database: FixtureDb,
+    schoolId: string,
+    dayOfWeek: DayOfWeek,
+  ) {
+    return database.masterTimetable.findMany({
+      where: { schoolId, dayOfWeek },
+      select: { periodNumber: true, teacherId: true },
+    });
+  },
+
   fixtureBusyTeacherIds(
     database: FixtureDb,
     schoolId: string,
@@ -185,6 +237,18 @@ export const fixturesRepository = {
     });
   },
 
+  fixtureBusyPeriods(database: FixtureDb, schoolId: string, date: Date) {
+    return database.proxyFixture.findMany({
+      where: {
+        schoolId,
+        date,
+        status: { not: "CANCELLED" },
+        assignedTeacherId: { not: null },
+      },
+      select: { id: true, periodNumber: true, assignedTeacherId: true },
+    });
+  },
+
   summaries(
     database: FixtureDb,
     schoolId: string,
@@ -194,6 +258,18 @@ export const fixturesRepository = {
   ) {
     return database.teacherFixtureSummary.findMany({
       where: { schoolId, teacherId: { in: teacherIds }, year, weekNumber },
+    });
+  },
+
+  summariesForWeek(
+    database: FixtureDb,
+    schoolId: string,
+    year: number,
+    weekNumber: number,
+  ) {
+    return database.teacherFixtureSummary.findMany({
+      where: { schoolId, year, weekNumber },
+      select: { teacherId: true, fixtureCount: true },
     });
   },
 

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
 import { resolve } from "node:path";
@@ -140,7 +141,12 @@ after(async () => {
 });
 
 test("official timetable import is idempotent", async () => {
-  const sourceDirectory = resolve(import.meta.dirname, "../../../source-data");
+  const sourceDirectory = [
+    resolve(import.meta.dirname, "../source-data"),
+    resolve(import.meta.dirname, "../../SchoolFixtureSystem/source-data"),
+    resolve(import.meta.dirname, "../../../source-data"),
+  ].find(existsSync);
+  assert.ok(sourceDirectory, "Official timetable source data was not found");
   const records = JSON.parse(
     await readFile(
       resolve(sourceDirectory, "generated-current-timetable.json"),

@@ -17,6 +17,7 @@ import {
   subjectMatchScore,
   workloadBalanceScore,
 } from "../src/modules/fixtures/fixtures.utils.js";
+import { fixturesRepository } from "../src/modules/fixtures/fixtures.repository.js";
 import { createApp } from "../src/app.js";
 import { prisma } from "../src/prisma/client.js";
 
@@ -254,6 +255,51 @@ test("date-only utilities avoid timezone shifts and calculate boundaries", () =>
     year: 2020,
     weekNumber: 53,
   });
+  assert.deepEqual(
+    ["2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07"].map(
+      (value) => weekdayForDate(parseDateOnly(value)),
+    ),
+    ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"],
+  );
+});
+
+test("a real write failure rolls back every earlier write in the transaction", async () => {
+  const action = "ROLLBACK_TEST_AUDIT";
+  await assert.rejects(() =>
+    fixturesRepository.transaction(async (transaction) => {
+      await transaction.auditLog.create({
+        data: {
+          schoolId: SCHOOL_ID,
+          action,
+          entityType: "ProxyFixture",
+        },
+      });
+      await transaction.proxyFixture.create({
+        data: {
+          schoolId: SCHOOL_ID,
+          date: parseDateOnly(DATE),
+          periodNumber: 8,
+          classSectionId: "missing-class",
+          subjectId: "missing-subject",
+          absentTeacherId: "missing-teacher",
+        },
+      });
+    }),
+  );
+  assert.equal(await prisma.auditLog.count({ where: { schoolId: SCHOOL_ID, action } }), 0);
+});
+
+test("fixture generation rejects weekends with a precise API error", async () => {
+  const result = await request("/api/v1/fixtures/generate", {
+    method: "POST",
+    headers: auth(),
+    body: JSON.stringify({
+      date: "2026-08-08",
+      absentTeacherIds: [ids.get("ABS-A")],
+    }),
+  });
+  assert.equal(result.response.status, 400);
+  assert.equal(result.body.error?.code, "NON_WORKING_DAY");
 });
 
 test("100-point scoring components and deterministic ties work", () => {
@@ -332,7 +378,7 @@ test("saves bulk attendance and enforces school isolation", async () => {
   assert.equal(isolated.body.error?.code, "INVALID_ATTENDANCE_TEACHER");
 });
 
-test("generates absent lectures with eligible candidates and immediate workload balance", async () => {
+test("concurrent generation for multiple absent teachers creates no duplicate fixtures", async () => {
   await prisma.proxyFixture.create({
     data: {
       schoolId: SCHOOL_ID,
@@ -346,7 +392,7 @@ test("generates absent lectures with eligible candidates and immediate workload 
       workloadCounted: false,
     },
   });
-  const result = await request<{
+  const generate = () => request<{
     fixtures: Array<{
       id: string;
       periodNumber: number;
@@ -363,10 +409,19 @@ test("generates absent lectures with eligible candidates and immediate workload 
       absentTeacherIds: [ids.get("ABS-A"), ids.get("ABS-B")],
     }),
   });
+  const [result, concurrentResult] = await Promise.all([generate(), generate()]);
   assert.equal(result.response.status, 200);
+  assert.equal(concurrentResult.response.status, 200);
   assert.equal(result.body.data?.fixtures.length, 4);
   const fixtures = result.body.data!.fixtures;
   generatedFixtureIds = fixtures.map((fixture) => fixture.id);
+  assert.equal(new Set(generatedFixtureIds).size, 4);
+  assert.equal(
+    await prisma.proxyFixture.count({
+      where: { schoolId: SCHOOL_ID, date: parseDateOnly(DATE), masterTimetableId: { not: null } },
+    }),
+    4,
+  );
   const periodOne = fixtures.find((fixture) => fixture.periodNumber === 1)!;
   const periodTwo = fixtures.find((fixture) => fixture.periodNumber === 2)!;
   const periodThree = fixtures.find((fixture) => fixture.periodNumber === 3)!;

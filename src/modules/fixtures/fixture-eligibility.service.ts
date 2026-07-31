@@ -43,34 +43,88 @@ export type EligibilityInput = {
   currentAssignedTeacherId?: string | null;
 };
 
-export const getEligibleTeachersForFixture = async (
-  database: FixtureDb,
-  input: EligibilityInput,
+type EligibilityPool = Awaited<
+  ReturnType<typeof fixturesRepository.eligibilityPool>
+>;
+
+export type FixtureEligibilitySnapshot = {
+  pool: EligibilityPool;
+  regularBusyByPeriod: Map<number, Set<string>>;
+  fixtureBusyByPeriod: Map<number, Set<string>>;
+  weeklyCounts: Map<string, number>;
+};
+
+const addBusyTeacher = (
+  target: Map<number, Set<string>>,
+  periodNumber: number,
+  teacherId: string,
 ) => {
-  const [pool, regularBusy, fixtureBusy] = await Promise.all([
+  const teachers = target.get(periodNumber) ?? new Set<string>();
+  teachers.add(teacherId);
+  target.set(periodNumber, teachers);
+};
+
+export const loadFixtureEligibilitySnapshot = async (
+  database: FixtureDb,
+  input: Pick<
+    EligibilityInput,
+    "schoolId" | "date" | "dayOfWeek" | "excludeFixtureId"
+  >,
+): Promise<FixtureEligibilitySnapshot> => {
+  const { year, weekNumber } = isoWeek(input.date);
+  const [pool, regularBusy, fixtureBusy, summaries] = await Promise.all([
     fixturesRepository.eligibilityPool(database, input.schoolId, input.date),
-    fixturesRepository.regularBusyTeacherIds(
+    fixturesRepository.regularBusyPeriods(
       database,
       input.schoolId,
       input.dayOfWeek,
-      input.periodNumber,
     ),
-    fixturesRepository.fixtureBusyTeacherIds(
+    fixturesRepository.fixtureBusyPeriods(
       database,
       input.schoolId,
       input.date,
-      input.periodNumber,
-      input.excludeFixtureId,
+    ),
+    fixturesRepository.summariesForWeek(
+      database,
+      input.schoolId,
+      year,
+      weekNumber,
     ),
   ]);
-  const regularBusyIds = new Set(regularBusy.map((item) => item.teacherId));
-  const fixtureBusyIds = new Set(
-    fixtureBusy.flatMap((item) =>
-      item.assignedTeacherId ? [item.assignedTeacherId] : [],
+  const regularBusyByPeriod = new Map<number, Set<string>>();
+  for (const busy of regularBusy) {
+    addBusyTeacher(regularBusyByPeriod, busy.periodNumber, busy.teacherId);
+  }
+  const fixtureBusyByPeriod = new Map<number, Set<string>>();
+  for (const busy of fixtureBusy) {
+    if (busy.id === input.excludeFixtureId || !busy.assignedTeacherId) continue;
+    addBusyTeacher(
+      fixtureBusyByPeriod,
+      busy.periodNumber,
+      busy.assignedTeacherId,
+    );
+  }
+  return {
+    pool,
+    regularBusyByPeriod,
+    fixtureBusyByPeriod,
+    weeklyCounts: new Map(
+      summaries.map((summary) => [summary.teacherId, summary.fixtureCount]),
     ),
-  );
+  };
+};
+
+export const getEligibleTeachersFromSnapshot = (
+  snapshot: FixtureEligibilitySnapshot,
+  input: EligibilityInput,
+  additionalBusyTeacherIds: ReadonlySet<string> = new Set(),
+) => {
+  const regularBusyIds =
+    snapshot.regularBusyByPeriod.get(input.periodNumber) ?? new Set<string>();
+  const fixtureBusyIds =
+    snapshot.fixtureBusyByPeriod.get(input.periodNumber) ?? new Set<string>();
   const excluded: ExcludedFixtureTeacher[] = [];
-  const eligible = pool.filter((teacher) => {
+  const eligible = snapshot.pool.filter((teacher) => {
     let reason: FixtureExclusionReason | undefined;
     if (!teacher.isActive) {
       reason = "INACTIVE";
@@ -85,7 +139,11 @@ export const getEligibleTeachersForFixture = async (
       );
     }
     if (!reason && regularBusyIds.has(teacher.id)) reason = "TEACHING_CLASS";
-    if (!reason && fixtureBusyIds.has(teacher.id)) {
+    if (
+      !reason &&
+      (fixtureBusyIds.has(teacher.id) ||
+        additionalBusyTeacherIds.has(teacher.id))
+    ) {
       reason = "ALREADY_ASSIGNED_FIXTURE";
     }
     if (reason) {
@@ -99,17 +157,6 @@ export const getEligibleTeachersForFixture = async (
     return true;
   });
 
-  const { year, weekNumber } = isoWeek(input.date);
-  const summaries = await fixturesRepository.summaries(
-    database,
-    input.schoolId,
-    eligible.map((teacher) => teacher.id),
-    year,
-    weekNumber,
-  );
-  const counts = new Map(
-    summaries.map((summary) => [summary.teacherId, summary.fixtureCount]),
-  );
   const missingWorkloads = eligible.filter(
     (teacher) =>
       !Number.isInteger(teacher.baseWeeklyTeachingPeriods) ||
@@ -126,12 +173,13 @@ export const getEligibleTeachersForFixture = async (
   }
   const workloads = eligible.map(
     (teacher) =>
-      teacher.baseWeeklyTeachingPeriods + (counts.get(teacher.id) ?? 0),
+      teacher.baseWeeklyTeachingPeriods +
+      (snapshot.weeklyCounts.get(teacher.id) ?? 0),
   );
   const minimumEligibleWorkload = workloads.length ? Math.min(...workloads) : 0;
   const maximumEligibleWorkload = workloads.length ? Math.max(...workloads) : 0;
   const candidates: ScoredCandidate[] = eligible.map((teacher) => {
-    const weeklyFixtureCount = counts.get(teacher.id) ?? 0;
+    const weeklyFixtureCount = snapshot.weeklyCounts.get(teacher.id) ?? 0;
     const effectiveWeeklyWorkload =
       teacher.baseWeeklyTeachingPeriods + weeklyFixtureCount;
     const subjectScore = subjectMatchScore(
@@ -162,4 +210,12 @@ export const getEligibleTeachersForFixture = async (
     };
   });
   return { candidates: sortCandidates(candidates), excluded };
+};
+
+export const getEligibleTeachersForFixture = async (
+  database: FixtureDb,
+  input: EligibilityInput,
+) => {
+  const snapshot = await loadFixtureEligibilitySnapshot(database, input);
+  return getEligibleTeachersFromSnapshot(snapshot, input);
 };

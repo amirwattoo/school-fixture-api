@@ -1,4 +1,5 @@
 import type { ErrorRequestHandler } from "express";
+import { Prisma } from "@prisma/client";
 import { ZodError } from "zod";
 
 import { ApiError } from "../common/api-error.js";
@@ -33,6 +34,42 @@ export const errorHandler: ErrorRequestHandler = (
       },
     });
     return;
+  }
+
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    const knownErrors: Record<
+      string,
+      { status: number; code: string; message: string }
+    > = {
+      P2002: {
+        status: 409,
+        code: "DUPLICATE_RECORD",
+        message: "The requested record already exists",
+      },
+      P2024: {
+        status: 503,
+        code: "DATABASE_BUSY",
+        message: "The database is busy; please try again shortly",
+      },
+      P2028: {
+        status: 503,
+        code: "DATABASE_TRANSACTION_EXPIRED",
+        message: "The database operation took too long; please try again",
+      },
+      P2034: {
+        status: 409,
+        code: "DATABASE_WRITE_CONFLICT",
+        message: "The data changed during this request; please try again",
+      },
+    };
+    const known = knownErrors[error.code];
+    if (known) {
+      response.status(known.status).json({
+        success: false,
+        error: { code: known.code, message: known.message },
+      });
+      return;
+    }
   }
 
   console.error(error);

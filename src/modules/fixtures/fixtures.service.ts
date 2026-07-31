@@ -15,11 +15,23 @@ import {
   renderFixtureWhatsAppMessage,
 } from "../whatsapp/whatsapp-message.service.js";
 import { normalizePakistaniWhatsAppNumber } from "../whatsapp/whatsapp-number.util.js";
-import { getEligibleTeachersForFixture } from "./fixture-eligibility.service.js";
+import {
+  getEligibleTeachersForFixture,
+  getEligibleTeachersFromSnapshot,
+  loadFixtureEligibilitySnapshot,
+} from "./fixture-eligibility.service.js";
 import { fixturesRepository, type FixtureDb } from "./fixtures.repository.js";
 
 const jsonValue = (value: unknown) =>
   JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+
+const fixtureLectureKey = (fixture: {
+  periodNumber: number;
+  classSectionId: string;
+  absentTeacherId?: string;
+  teacherId?: string;
+}) =>
+  `${fixture.periodNumber}:${fixture.classSectionId}:${fixture.absentTeacherId ?? fixture.teacherId}`;
 
 const audit = (
   database: FixtureDb,
@@ -47,12 +59,16 @@ const runSerializable = async <T>(
     try {
       return await fixturesRepository.transaction(callback);
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === "P2034" &&
-        attempt < 3
-      ) {
-        continue;
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        const retryable = error.code === "P2034" || error.code === "P2002";
+        if (retryable && attempt < 3) continue;
+        if (retryable) {
+          throw new ApiError(
+            409,
+            "FIXTURE_TRANSACTION_CONFLICT",
+            "Fixture data changed while the request was being saved; please try again",
+          );
+        }
       }
       throw error;
     }
@@ -89,31 +105,43 @@ export const fixturesService = {
     dateValue: string,
     absentTeacherIds: string[],
   ) {
-    return runSerializable(async (database) => {
-      const school = await fixturesRepository.schoolSettings(
-        database,
-        actor.schoolId,
+    const database = fixturesRepository.database;
+    const startedAt = Date.now();
+    const logTiming = (stage: string) => {
+      if (env.FIXTURE_DEBUG_TIMING || env.NODE_ENV === "development") {
+        console.info("[fixture-generation-timing]", {
+          stage,
+          elapsedMs: Date.now() - startedAt,
+          schoolId: actor.schoolId,
+          selectedDate: dateValue,
+        });
+      }
+    };
+    const school = await fixturesRepository.schoolSettings(
+      database,
+      actor.schoolId,
+    );
+    if (!school) {
+      throw new ApiError(404, "SCHOOL_NOT_FOUND", "School was not found");
+    }
+    const resolvedDate = resolveSchoolDate(dateValue, school.timezone);
+    const date = resolvedDate.storageDate;
+    const dayOfWeek = resolvedDate.weekday;
+    if (dayOfWeek === "SATURDAY" || dayOfWeek === "SUNDAY") {
+      throw new ApiError(
+        400,
+        "NON_WORKING_DAY",
+        `Fixtures cannot be generated for ${dayOfWeek.toLocaleLowerCase("en")}; select a Monday-to-Friday working date`,
+        {
+          selectedDate: resolvedDate.selectedDate,
+          resolvedWeekday: dayOfWeek,
+          timezone: resolvedDate.timezone,
+        },
       );
-      if (!school) {
-        throw new ApiError(404, "SCHOOL_NOT_FOUND", "School was not found");
-      }
-      const resolvedDate = resolveSchoolDate(dateValue, school.timezone);
-      const date = resolvedDate.storageDate;
-      const dayOfWeek = resolvedDate.weekday;
-      if (dayOfWeek === "SATURDAY" || dayOfWeek === "SUNDAY") {
-        throw new ApiError(
-          400,
-          "NON_WORKING_DAY",
-          `Fixtures cannot be generated for ${dayOfWeek.toLocaleLowerCase("en")}; select a Monday-to-Friday working date`,
-          {
-            selectedDate: resolvedDate.selectedDate,
-            resolvedWeekday: dayOfWeek,
-            timezone: resolvedDate.timezone,
-          },
-        );
-      }
+    }
 
-      const [teachers, attendance, diagnosticTeachers] = await Promise.all([
+    const [teachers, attendance, matchingLectures, diagnosticTeachers, snapshot] =
+      await Promise.all([
         fixturesRepository.absentTeachers(
           database,
           actor.schoolId,
@@ -125,10 +153,22 @@ export const fixturesService = {
           date,
           absentTeacherIds,
         ),
+        fixturesRepository.absentLectures(
+          database,
+          actor.schoolId,
+          dayOfWeek,
+          absentTeacherIds,
+        ),
         env.NODE_ENV === "development"
           ? fixturesRepository.teacherDiagnostics(database, absentTeacherIds)
           : Promise.resolve([]),
+        loadFixtureEligibilitySnapshot(database, {
+          schoolId: actor.schoolId,
+          date,
+          dayOfWeek,
+        }),
       ]);
+    logTiming("bulk-reads-complete");
       if (env.NODE_ENV === "development") {
         const diagnosticById = new Map(
           diagnosticTeachers.map((teacher) => [teacher.id, teacher]),
@@ -173,20 +213,14 @@ export const fixturesService = {
         );
       }
 
-      const matchingLectures = await fixturesRepository.absentLectures(
-        database,
-        actor.schoolId,
-        dayOfWeek,
-        absentTeacherIds,
-      );
-      const lectures = matchingLectures.filter(
+    const lectures = matchingLectures.filter(
         (lecture) =>
           !isTeacherAvailableAtPeriod(
             attendanceByTeacher.get(lecture.teacherId),
             lecture.periodNumber,
           ),
       );
-      const skippedReasons: string[] = [];
+    const skippedReasons: string[] = [];
       if (matchingLectures.length === 0) {
         skippedReasons.push(
           `No ${dayOfWeek} timetable periods matched the selected unavailable teachers`,
@@ -199,24 +233,21 @@ export const fixturesService = {
         );
       }
 
-      const fixtures = [];
-      let existingFixtureCount = 0;
-      let createdFixtureCount = 0;
-      let fixturesWithoutEligibleReplacementCount = 0;
-      for (const lecture of lectures) {
-        const existing = await fixturesRepository.existingForLecture(
-          database,
-          actor.schoolId,
-          date,
-          lecture,
-        );
-        if (existing) {
-          existingFixtureCount += 1;
-          fixtures.push(existing);
-          continue;
-        }
-
-        const eligibility = await getEligibleTeachersForFixture(database, {
+    const existingFixtures = await fixturesRepository.existingForLectures(
+      database,
+      actor.schoolId,
+      date,
+      lectures,
+    );
+    const existingByLectureId = new Map(
+      existingFixtures.map((fixture) => [fixtureLectureKey(fixture), fixture]),
+    );
+    const plannedBusyByPeriod = new Map<number, Set<string>>();
+    const prepared = lectures.flatMap((lecture) => {
+      if (existingByLectureId.has(fixtureLectureKey(lecture))) return [];
+      const plannedBusy =
+        plannedBusyByPeriod.get(lecture.periodNumber) ?? new Set<string>();
+      const eligibility = getEligibleTeachersFromSnapshot(snapshot, {
           schoolId: actor.schoolId,
           date,
           dayOfWeek,
@@ -225,64 +256,107 @@ export const fixturesService = {
           subjectName: lecture.subject.name,
           subjectCode: lecture.subject.code,
           classLevel: lecture.classSection.teachingLevel,
-        });
-        const candidates = eligibility.candidates;
-        const selected = candidates[0];
-        const scoringDetails = {
+        }, plannedBusy);
+      const selected = eligibility.candidates[0];
+      if (selected) {
+        plannedBusy.add(selected.teacherId);
+        plannedBusyByPeriod.set(lecture.periodNumber, plannedBusy);
+        snapshot.weeklyCounts.set(
+          selected.teacherId,
+          (snapshot.weeklyCounts.get(selected.teacherId) ?? 0) + 1,
+        );
+      }
+      return [{
+        lecture,
+        selected,
+        scoringDetails: {
           requiredSubject: lecture.subject.name,
           requiredTeachingLevel: lecture.classSection.teachingLevel,
           selectedTeacherId: selected?.teacherId ?? null,
-          candidates,
+          candidates: eligibility.candidates,
           excluded: eligibility.excluded,
-        };
-        const fixture = await fixturesRepository.create(database, {
+        },
+      }];
+    });
+    logTiming("scoring-complete");
+
+    return runSerializable(async (transaction) => {
+      const committedExisting = await fixturesRepository.existingForLectures(
+        transaction,
+        actor.schoolId,
+        date,
+        lectures,
+      );
+      const committedByLectureId = new Map(
+        committedExisting.map((fixture) => [
+          fixtureLectureKey(fixture),
+          fixture,
+        ]),
+      );
+      const createdFixtures = [];
+      for (const plan of prepared) {
+        if (committedByLectureId.has(fixtureLectureKey(plan.lecture))) continue;
+        const fixture = await fixturesRepository.create(transaction, {
           schoolId: actor.schoolId,
           date,
-          periodNumber: lecture.periodNumber,
-          masterTimetableId: lecture.id,
-          classSectionId: lecture.classSectionId,
-          subjectId: lecture.subjectId,
-          absentTeacherId: lecture.teacherId,
-          assignedTeacherId: selected?.teacherId,
-          autoAssignedTeacherId: selected?.teacherId,
-          autoScore: selected?.totalScore,
-          scoringDetails: jsonValue(scoringDetails),
-          workloadCounted: Boolean(selected),
+          periodNumber: plan.lecture.periodNumber,
+          masterTimetableId: plan.lecture.id,
+          classSectionId: plan.lecture.classSectionId,
+          subjectId: plan.lecture.subjectId,
+          absentTeacherId: plan.lecture.teacherId,
+          assignedTeacherId: plan.selected?.teacherId,
+          autoAssignedTeacherId: plan.selected?.teacherId,
+          autoScore: plan.selected?.totalScore,
+          scoringDetails: jsonValue(plan.scoringDetails),
+          workloadCounted: Boolean(plan.selected),
         });
-        createdFixtureCount += 1;
-        if (!selected) fixturesWithoutEligibleReplacementCount += 1;
-        if (selected) {
+        createdFixtures.push(fixture);
+        if (plan.selected) {
           const { year, weekNumber } = isoWeek(date);
           await fixturesRepository.incrementSummary(
-            database,
+            transaction,
             actor.schoolId,
-            selected.teacherId,
+            plan.selected.teacherId,
             year,
             weekNumber,
           );
           await audit(
-            database,
+            transaction,
             actor,
             "FIXTURE_AUTO_ASSIGNED",
             "ProxyFixture",
             fixture.id,
             {
-              assignedTeacherId: selected.teacherId,
-              score: selected.totalScore,
+              assignedTeacherId: plan.selected.teacherId,
+              score: plan.selected.totalScore,
             },
           );
         } else {
           await audit(
-            database,
+            transaction,
             actor,
             "FIXTURE_UNASSIGNED",
             "ProxyFixture",
             fixture.id,
-            { periodNumber: lecture.periodNumber },
+            { periodNumber: plan.lecture.periodNumber },
           );
         }
-        fixtures.push(fixture);
       }
+      const fixturesByLectureId = new Map(
+        [...committedExisting, ...createdFixtures].map((fixture) => [
+          fixtureLectureKey(fixture),
+          fixture,
+        ]),
+      );
+      const fixtures = lectures.flatMap((lecture) => {
+        const fixture = fixturesByLectureId.get(fixtureLectureKey(lecture));
+        return fixture ? [fixture] : [];
+      });
+      const createdFixtureCount = createdFixtures.length;
+      const existingFixtureCount = fixtures.length - createdFixtureCount;
+      const fixturesWithoutEligibleReplacementCount = createdFixtures.filter(
+        (fixture) => !fixture.assignedTeacherId,
+      ).length;
       if (existingFixtureCount > 0) {
         skippedReasons.push(
           `${existingFixtureCount} existing fixture(s), including published fixtures, were returned without creating duplicates`,
@@ -303,7 +377,7 @@ export const fixturesService = {
         skippedReasons,
       };
       await audit(
-        database,
+        transaction,
         actor,
         "FIXTURES_GENERATED",
         "ProxyFixture",
@@ -424,39 +498,30 @@ export const fixturesService = {
   },
 
   async candidates(schoolId: string, fixtureId: string) {
-    return fixturesRepository.transaction(async (database) => {
-      const fixture = await fixturesRepository.findForUpdate(
-        database,
-        schoolId,
-        fixtureId,
-      );
-      if (!fixture)
-        throw new ApiError(404, "FIXTURE_NOT_FOUND", "Fixture was not found");
-      return getEligibleTeachersForFixture(database, {
-        schoolId,
-        date: fixture.date,
-        dayOfWeek: weekdayForDate(fixture.date),
-        periodNumber: fixture.periodNumber,
-        absentTeacherId: fixture.absentTeacherId,
-        subjectName: fixture.subject.name,
-        subjectCode: fixture.subject.code,
-        classLevel: fixture.classSection.teachingLevel,
-        excludeFixtureId: fixture.id,
-        currentAssignedTeacherId: fixture.assignedTeacherId,
-      });
+    const fixture = await fixturesRepository.find(schoolId, fixtureId);
+    if (!fixture)
+      throw new ApiError(404, "FIXTURE_NOT_FOUND", "Fixture was not found");
+    return getEligibleTeachersForFixture(fixturesRepository.database, {
+      schoolId,
+      date: fixture.date,
+      dayOfWeek: weekdayForDate(fixture.date),
+      periodNumber: fixture.periodNumber,
+      absentTeacherId: fixture.absentTeacherId,
+      subjectName: fixture.subject.name,
+      subjectCode: fixture.subject.code,
+      classLevel: fixture.classSection.teachingLevel,
+      excludeFixtureId: fixture.id,
+      currentAssignedTeacherId: fixture.assignedTeacherId,
     });
   },
 
   async scoring(schoolId: string, fixtureId: string) {
-    return fixturesRepository.transaction(async (database) => {
-      const fixture = await fixturesRepository.findForUpdate(
-        database,
-        schoolId,
-        fixtureId,
-      );
-      if (!fixture)
-        throw new ApiError(404, "FIXTURE_NOT_FOUND", "Fixture was not found");
-      const eligibility = await getEligibleTeachersForFixture(database, {
+    const fixture = await fixturesRepository.find(schoolId, fixtureId);
+    if (!fixture)
+      throw new ApiError(404, "FIXTURE_NOT_FOUND", "Fixture was not found");
+    const eligibility = await getEligibleTeachersForFixture(
+      fixturesRepository.database,
+      {
         schoolId,
         date: fixture.date,
         dayOfWeek: weekdayForDate(fixture.date),
@@ -466,15 +531,15 @@ export const fixturesService = {
         subjectCode: fixture.subject.code,
         classLevel: fixture.classSection.teachingLevel,
         excludeFixtureId: fixture.id,
-      });
-      return {
-        requiredSubject: fixture.subject.name,
-        requiredTeachingLevel: fixture.classSection.teachingLevel,
-        selectedTeacherId: fixture.assignedTeacherId,
-        candidates: eligibility.candidates,
-        excluded: eligibility.excluded,
-      };
-    });
+      },
+    );
+    return {
+      requiredSubject: fixture.subject.name,
+      requiredTeachingLevel: fixture.classSection.teachingLevel,
+      selectedTeacherId: fixture.assignedTeacherId,
+      candidates: eligibility.candidates,
+      excluded: eligibility.excluded,
+    };
   },
 
   async cancel(actor: AuditActor, fixtureId: string) {
