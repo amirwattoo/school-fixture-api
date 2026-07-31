@@ -33,7 +33,11 @@ export const fixtureInclude = {
 
 export const fixturesRepository = {
   transaction<T>(callback: (transaction: FixtureDb) => Promise<T>) {
-    return prisma.$transaction(callback, { isolationLevel: "Serializable" });
+    return prisma.$transaction(callback, {
+      isolationLevel: "Serializable",
+      maxWait: 15000,
+      timeout: 60000,
+    });
   },
 
   list(schoolId: string, date: Date) {
