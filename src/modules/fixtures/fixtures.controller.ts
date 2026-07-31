@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { RequestHandler } from "express";
 
 import { sendSuccess } from "../../common/response.js";
@@ -85,8 +84,10 @@ export const cancelFixture: RequestHandler = async (request, response) => {
 
 export const publishFixtures: RequestHandler = async (request, response) => {
   const { date } = publishFixturesSchema.parse(request.body);
-  const requestId = randomUUID();
-  response.setHeader("X-Request-ID", requestId);
-  const result = await fixturesService.publish(request.auth!, date, requestId);
+  const result = await fixturesService.publish(
+    request.auth!,
+    date,
+    request.requestId,
+  );
   sendSuccess(response, result, "Fixtures published successfully");
 };

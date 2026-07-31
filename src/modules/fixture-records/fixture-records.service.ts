@@ -2,6 +2,8 @@ import type { FixtureStatus } from "@prisma/client";
 
 import { ApiError } from "../../common/api-error.js";
 import { parseDateOnly } from "../../common/date-only.js";
+import { databasePhase } from "../../common/request-timing.js";
+import { referenceCache } from "../../common/reference-cache.js";
 import { attendancePeriodSummary } from "../attendance/attendance-availability.js";
 import { fixtureRecordsRepository } from "./fixture-records.repository.js";
 
@@ -36,8 +38,14 @@ export const fixtureRecordsService = {
     sort: "highest" | "lowest" | "name",
   ) {
     const [teachers, summaries] = await Promise.all([
-      fixtureRecordsRepository.teachers(schoolId),
-      fixtureRecordsRepository.weekly(schoolId, year, weekNumber),
+      referenceCache.getOrLoad("records-teachers", schoolId, "all", () =>
+        databasePhase("records-teacher-directory", () =>
+          fixtureRecordsRepository.teachers(schoolId),
+        ),
+      ),
+      databasePhase("records-weekly-summary", () =>
+        fixtureRecordsRepository.weekly(schoolId, year, weekNumber),
+      ),
     ]);
     const counts = new Map(
       summaries.map((summary) => [summary.teacherId, summary.fixtureCount]),
@@ -60,8 +68,14 @@ export const fixtureRecordsService = {
     sort: "highest" | "lowest" | "name",
   ) {
     const [teachers, summaries] = await Promise.all([
-      fixtureRecordsRepository.teachers(schoolId),
-      fixtureRecordsRepository.yearly(schoolId, year),
+      referenceCache.getOrLoad("records-teachers", schoolId, "all", () =>
+        databasePhase("records-teacher-directory", () =>
+          fixtureRecordsRepository.teachers(schoolId),
+        ),
+      ),
+      databasePhase("records-yearly-summary", () =>
+        fixtureRecordsRepository.yearly(schoolId, year),
+      ),
     ]);
     const counts = new Map(
       summaries.map((summary) => [
@@ -89,28 +103,43 @@ export const fixtureRecordsService = {
       from?: string;
       to?: string;
       status?: FixtureStatus;
+      page: number;
+      pageSize: number;
     },
   ) {
-    const teacher = await fixtureRecordsRepository.teacher(schoolId, teacherId);
-    if (!teacher)
-      throw new ApiError(404, "TEACHER_NOT_FOUND", "Teacher was not found");
-
     const yearFrom = filters.year
       ? parseDateOnly(`${filters.year}-01-01`)
       : undefined;
     const yearTo = filters.year
       ? parseDateOnly(`${filters.year}-12-31`)
       : undefined;
-    const fixtures = await fixtureRecordsRepository.history(
-      schoolId,
-      teacherId,
-      {
+    const [teacher, historyResult] = await Promise.all([
+      databasePhase("records-history-teacher", () =>
+        fixtureRecordsRepository.teacher(schoolId, teacherId),
+      ),
+      databasePhase("records-history", () =>
+        fixtureRecordsRepository.history(schoolId, teacherId, {
         from: filters.from ? parseDateOnly(filters.from) : yearFrom,
         to: filters.to ? parseDateOnly(filters.to) : yearTo,
         status: filters.status,
+          page: filters.page,
+          pageSize: filters.pageSize,
+        }),
+      ),
+    ]);
+    if (!teacher)
+      throw new ApiError(404, "TEACHER_NOT_FOUND", "Teacher was not found");
+    const [fixtures, total] = historyResult;
+    return {
+      teacher,
+      fixtures,
+      pagination: {
+        page: filters.page,
+        pageSize: filters.pageSize,
+        total,
+        totalPages: Math.ceil(total / filters.pageSize),
       },
-    );
-    return { teacher, fixtures };
+    };
   },
 
   async attendance(
@@ -119,6 +148,8 @@ export const fixtureRecordsService = {
       year?: number;
       from?: string;
       to?: string;
+      page: number;
+      pageSize: number;
     },
   ) {
     const yearFrom = filters.year
@@ -131,19 +162,32 @@ export const fixtureRecordsService = {
       from: filters.from ? parseDateOnly(filters.from) : yearFrom,
       to: filters.to ? parseDateOnly(filters.to) : yearTo,
     };
-    const [records, fixtureRows, school] = await Promise.all([
-      fixtureRecordsRepository.attendance(schoolId, range),
-      fixtureRecordsRepository.attendanceFixtureCounts(schoolId, range),
-      fixtureRecordsRepository.schoolSettings(schoolId),
+    const [attendanceResult, fixtureRows, school] = await Promise.all([
+      databasePhase("records-attendance", () =>
+        fixtureRecordsRepository.attendance(schoolId, {
+          ...range,
+          page: filters.page,
+          pageSize: filters.pageSize,
+        }),
+      ),
+      databasePhase("records-attendance-fixture-counts", () =>
+        fixtureRecordsRepository.attendanceFixtureCounts(schoolId, range),
+      ),
+      referenceCache.getOrLoad("school-settings", schoolId, "records", () =>
+        databasePhase("records-school-settings", () =>
+          fixtureRecordsRepository.schoolSettings(schoolId),
+        ),
+      ),
     ]);
     if (!school)
       throw new ApiError(404, "SCHOOL_NOT_FOUND", "School was not found");
     const fixtureCounts = new Map<string, number>();
     for (const fixture of fixtureRows) {
       const key = `${fixture.absentTeacherId}:${fixture.date.toISOString().slice(0, 10)}`;
-      fixtureCounts.set(key, (fixtureCounts.get(key) ?? 0) + 1);
+      fixtureCounts.set(key, fixture._count);
     }
-    return records.map((record) => {
+    const [records, total] = attendanceResult;
+    const result = records.map((record) => {
       const periods = attendancePeriodSummary(record, school.periodsPerDay);
       const key = `${record.teacherId}:${record.date.toISOString().slice(0, 10)}`;
       return {
@@ -158,5 +202,14 @@ export const fixtureRecordsService = {
         fixturesGenerated: fixtureCounts.get(key) ?? 0,
       };
     });
+    return {
+      records: result,
+      pagination: {
+        page: filters.page,
+        pageSize: filters.pageSize,
+        total,
+        totalPages: Math.ceil(total / filters.pageSize),
+      },
+    };
   },
 };

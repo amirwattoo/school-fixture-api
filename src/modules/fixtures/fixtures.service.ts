@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 
 import { ApiError } from "../../common/api-error.js";
 import type { AuditActor } from "../../common/audit.js";
+import { databasePhase } from "../../common/request-timing.js";
 import {
   isoWeek,
   parseDateOnly,
@@ -159,7 +160,9 @@ export type FixtureGenerationDiagnostics = {
 
 export const fixturesService = {
   list(schoolId: string, dateValue: string) {
-    return fixturesRepository.list(schoolId, parseDateOnly(dateValue));
+    return databasePhase("fixtures-list", () =>
+      fixturesRepository.list(schoolId, parseDateOnly(dateValue)),
+    );
   },
 
   async get(schoolId: string, fixtureId: string) {

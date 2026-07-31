@@ -2,6 +2,10 @@ import { z } from "zod";
 
 const yearSchema = z.coerce.number().int().min(2000).max(2200);
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const paginationFields = {
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(200).default(100),
+};
 
 export const weeklyRecordsSchema = z.object({
   year: yearSchema,
@@ -24,6 +28,7 @@ export const teacherHistoryQuerySchema = z
     from: dateSchema.optional(),
     to: dateSchema.optional(),
     status: z.enum(["DRAFT", "PUBLISHED", "CANCELLED"]).optional(),
+    ...paginationFields,
   })
   .refine((value) => !value.from || !value.to || value.from <= value.to, {
     message: "From date must not be after to date",
@@ -35,6 +40,7 @@ export const attendanceReportSchema = z
     year: yearSchema.optional(),
     from: dateSchema.optional(),
     to: dateSchema.optional(),
+    ...paginationFields,
   })
   .refine((value) => value.year || value.from || value.to, {
     message: "Provide a year or date range",

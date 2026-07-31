@@ -5,6 +5,8 @@ import helmet from "helmet";
 
 import { env } from "./config/env.js";
 import { errorHandler } from "./middleware/error-handler.js";
+import { requestTimingMiddleware } from "./common/request-timing.js";
+import { dashboardRouter } from "./modules/dashboard/dashboard.routes.js";
 import { authRouter } from "./modules/auth/auth.routes.js";
 import { attendanceRouter } from "./modules/attendance/attendance.routes.js";
 import { classSectionsRouter } from "./modules/class-sections/class-sections.routes.js";
@@ -30,9 +32,11 @@ export const createApp = () => {
   );
   app.use(express.json({ limit: "1mb" }));
   app.use(cookieParser());
+  app.use(requestTimingMiddleware);
 
   app.use("/api/v1/health", healthRouter);
   app.use("/api/v1/auth", authRouter);
+  app.use("/api/v1/dashboard", dashboardRouter);
   app.use("/api/v1/users", usersRouter);
   app.use("/api/v1/teachers", teachersRouter);
   app.use("/api/v1/subjects", subjectsRouter);

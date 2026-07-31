@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import type { PrismaClient, TeachingLevel } from "@prisma/client";
 
 import { prisma } from "../../prisma/client.js";
+import { referenceCache } from "../../common/reference-cache.js";
 import {
   OFFICIAL_CLASSES,
   OFFICIAL_SUBJECTS,
@@ -155,7 +156,7 @@ export const importOfficialTimetableRecords = async (
     preparedOfficialTeachers.map((teacher) => teacher.normalizedName),
   );
 
-  return runSerializableImport(client, async (tx) => {
+  const summary = await runSerializableImport(client, async (tx) => {
     const summary: OfficialTimetableImportSummary = {
       teachersCreated: 0,
       teachersUpdated: 0,
@@ -350,6 +351,8 @@ export const importOfficialTimetableRecords = async (
     });
     return summary;
   });
+  referenceCache.invalidateAllForSchool(schoolId);
+  return summary;
 };
 
 export const importOfficialTimetableFromFiles = async (

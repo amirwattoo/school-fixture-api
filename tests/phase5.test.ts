@@ -372,6 +372,29 @@ test("publication creates READY notifications without mock delivery", async () =
   );
 });
 
+test("dashboard summary returns all counters in one request", async () => {
+  const result = await request<{
+    summary: {
+      drafts: number;
+      published: number;
+      messagesReady: number;
+      messagesOpened: number;
+      messagesConfirmed: number;
+    };
+  }>(`/api/v1/dashboard?date=${DATE}`, { headers: auth() });
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(result.body.data?.summary, {
+    absent: 0,
+    drafts: 0,
+    published: 4,
+    unassigned: 0,
+    weekly: 4,
+    messagesReady: 4,
+    messagesOpened: 0,
+    messagesConfirmed: 0,
+  });
+});
+
 test("missing and invalid numbers return visible Click-to-Chat errors", async () => {
   const result = await request<{
     notifications: Array<{

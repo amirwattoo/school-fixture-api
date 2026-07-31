@@ -1,4 +1,6 @@
-import type { AttendanceStatus, Prisma } from "@prisma/client";
+import { randomUUID } from "node:crypto";
+
+import { Prisma, type AttendanceStatus, type DailyAttendance } from "@prisma/client";
 
 import { ApiError } from "../../common/api-error.js";
 import { prisma } from "../../prisma/client.js";
@@ -22,7 +24,6 @@ export const attendanceRepository = {
         teacher: {
           select: { id: true, name: true, employeeCode: true, isActive: true },
         },
-        markedBy: { select: { id: true, name: true } },
       },
       orderBy: { teacher: { name: "asc" } },
     });
@@ -61,24 +62,27 @@ export const attendanceRepository = {
     records: AttendanceRecordInput[],
     confirmPublishedFixtureImpact = false,
   ) {
-    return prisma.$transaction(async (transaction) => {
-      const recordByTeacher = new Map(
-        records.map((record) => [record.teacherId, record]),
-      );
-      const publishedAssignments = await transaction.proxyFixture.findMany({
-        where: {
-          schoolId,
-          date,
-          assignedTeacherId: { in: records.map((record) => record.teacherId) },
-          status: "PUBLISHED",
-        },
-        select: {
-          id: true,
-          assignedTeacherId: true,
-          periodNumber: true,
-          classSection: { select: { name: true } },
-        },
-      });
+    const recordByTeacher = new Map(
+      records.map((record) => [record.teacherId, record]),
+    );
+    const assignedFixtures = await prisma.proxyFixture.findMany({
+      where: {
+        schoolId,
+        date,
+        assignedTeacherId: { in: records.map((record) => record.teacherId) },
+        status: { in: ["DRAFT", "PUBLISHED"] },
+      },
+      select: {
+        id: true,
+        assignedTeacherId: true,
+        periodNumber: true,
+        status: true,
+        classSection: { select: { name: true } },
+      },
+    });
+    const publishedAssignments = assignedFixtures.filter(
+      (fixture) => fixture.status === "PUBLISHED",
+    );
       const affectedPublishedBeforeSave = publishedAssignments.filter(
         (fixture) => {
           const record = fixture.assignedTeacherId
@@ -114,72 +118,93 @@ export const attendanceRepository = {
           },
         );
       }
-
-      const saved = [];
-      for (const record of records) {
-        saved.push(
-          await transaction.dailyAttendance.upsert({
-            where: {
-              schoolId_date_teacherId: {
-                schoolId,
-                date,
-                teacherId: record.teacherId,
-              },
-            },
-            update: {
-              status: record.status,
-              availableFromPeriod: record.availableFromPeriod ?? null,
-              unavailableFromPeriod: record.unavailableFromPeriod ?? null,
-              reason: record.reason?.trim() || record.remarks?.trim() || null,
-              notes: record.notes?.trim() || null,
-              remarks: record.remarks?.trim() || null,
-              markedById,
-            },
-            create: {
-              schoolId,
-              date,
-              teacherId: record.teacherId,
-              status: record.status,
-              availableFromPeriod: record.availableFromPeriod ?? null,
-              unavailableFromPeriod: record.unavailableFromPeriod ?? null,
-              reason: record.reason?.trim() || record.remarks?.trim() || null,
-              notes: record.notes?.trim() || null,
-              remarks: record.remarks?.trim() || null,
-              markedById,
-            },
-          }),
-        );
-      }
-      const affectedDraftFixtureIds: string[] = [];
-      const affectedPublishedFixtureIds: string[] = [];
-      for (const record of saved) {
-        const fixtures = await transaction.proxyFixture.findMany({
-          where: {
-            schoolId,
-            date,
-            assignedTeacherId: record.teacherId,
-            status: { in: ["DRAFT", "PUBLISHED"] },
+    const draftUpdates = assignedFixtures
+      .filter((fixture) => fixture.status === "DRAFT")
+      .map((fixture) => ({
+        id: fixture.id,
+        reason: attendanceExclusionReason(
+          {
+            status: recordByTeacher.get(fixture.assignedTeacherId!)!.status,
+            availableFromPeriod:
+              recordByTeacher.get(fixture.assignedTeacherId!)!
+                .availableFromPeriod ?? null,
+            unavailableFromPeriod:
+              recordByTeacher.get(fixture.assignedTeacherId!)!
+                .unavailableFromPeriod ?? null,
           },
-          select: { id: true, periodNumber: true, status: true },
+          fixture.periodNumber,
+        ),
+      }));
+    const affectedDraftFixtureIds = draftUpdates
+      .filter((fixture) => fixture.reason)
+      .map((fixture) => fixture.id);
+    const unaffectedDraftFixtureIds = draftUpdates
+      .filter((fixture) => !fixture.reason)
+      .map((fixture) => fixture.id);
+    const affectedPublishedFixtureIds = affectedPublishedBeforeSave.map(
+      (fixture) => fixture.id,
+    );
+    const values = Prisma.join(
+      records.map((record) => {
+        const reason =
+          record.reason?.trim() || record.remarks?.trim() || null;
+        return Prisma.sql`(
+          ${randomUUID()}, ${schoolId}, ${date}, ${record.teacherId},
+          CAST(${record.status} AS "AttendanceStatus"),
+          ${record.availableFromPeriod ?? null},
+          ${record.unavailableFromPeriod ?? null},
+          ${reason}, ${record.notes?.trim() || null},
+          ${record.remarks?.trim() || null}, ${markedById},
+          CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )`;
+      }),
+    );
+
+    return prisma.$transaction(async (transaction) => {
+      const saved = await transaction.$queryRaw<DailyAttendance[]>(Prisma.sql`
+        INSERT INTO "daily_attendance" (
+          "id", "schoolId", "date", "teacherId", "status",
+          "availableFromPeriod", "unavailableFromPeriod", "reason", "notes",
+          "remarks", "markedById", "createdAt", "updatedAt"
+        )
+        VALUES ${values}
+        ON CONFLICT ("schoolId", "date", "teacherId") DO UPDATE SET
+          "status" = EXCLUDED."status",
+          "availableFromPeriod" = EXCLUDED."availableFromPeriod",
+          "unavailableFromPeriod" = EXCLUDED."unavailableFromPeriod",
+          "reason" = EXCLUDED."reason",
+          "notes" = EXCLUDED."notes",
+          "remarks" = EXCLUDED."remarks",
+          "markedById" = EXCLUDED."markedById",
+          "updatedAt" = CURRENT_TIMESTAMP
+        RETURNING *
+      `);
+      if (affectedDraftFixtureIds.length) {
+        const affectedUpdates = draftUpdates.filter((fixture) => fixture.reason);
+        const reasonCases = Prisma.join(
+          affectedUpdates.map(
+            (fixture) =>
+              Prisma.sql`WHEN ${fixture.id} THEN ${fixture.reason ?? ""}`,
+          ),
+          " ",
+        );
+        const affectedIds = Prisma.join(
+          affectedUpdates.map((fixture) => fixture.id),
+        );
+        await transaction.$executeRaw(Prisma.sql`
+          UPDATE "proxy_fixtures"
+          SET
+            "requiresReassignment" = true,
+            "reassignmentReason" = CASE "id" ${reasonCases} END,
+            "updatedAt" = CURRENT_TIMESTAMP
+          WHERE "id" IN (${affectedIds}) AND "status" = 'DRAFT'
+        `);
+      }
+      if (unaffectedDraftFixtureIds.length) {
+        await transaction.proxyFixture.updateMany({
+          where: { id: { in: unaffectedDraftFixtureIds }, status: "DRAFT" },
+          data: { requiresReassignment: false, reassignmentReason: null },
         });
-        for (const fixture of fixtures) {
-          const reason = attendanceExclusionReason(
-            record,
-            fixture.periodNumber,
-          );
-          if (fixture.status === "PUBLISHED") {
-            if (reason) affectedPublishedFixtureIds.push(fixture.id);
-            continue;
-          }
-          await transaction.proxyFixture.update({
-            where: { id: fixture.id },
-            data: {
-              requiresReassignment: Boolean(reason),
-              reassignmentReason: reason ?? null,
-            },
-          });
-          if (reason) affectedDraftFixtureIds.push(fixture.id);
-        }
       }
       await transaction.auditLog.create({
         data: {
@@ -198,11 +223,18 @@ export const attendanceRepository = {
           },
         },
       });
+      const savedByTeacher = new Map(
+        saved.map((record) => [record.teacherId, record]),
+      );
       return {
-        records: saved,
+        records: records.map((record) => savedByTeacher.get(record.teacherId)!),
         affectedDraftFixtureIds,
         affectedPublishedFixtureIds,
       };
+    }, {
+      isolationLevel: "ReadCommitted",
+      maxWait: 5000,
+      timeout: 5000,
     });
   },
 

@@ -1,5 +1,6 @@
 import { ApiError } from "../../common/api-error.js";
 import { type AuditActor, createAuditLog } from "../../common/audit.js";
+import { databasePhase } from "../../common/request-timing.js";
 import { env } from "../../config/env.js";
 import {
   buildWhatsAppClickToChatUrl,
@@ -100,7 +101,9 @@ const findNotification = async (schoolId: string, notificationId: string) => {
 
 export const whatsappService = {
   async list(schoolId: string, filters: NotificationFilters) {
-    const result = await whatsappRepository.list(schoolId, filters);
+    const result = await databasePhase("whatsapp-notification-list", () =>
+      whatsappRepository.list(schoolId, filters),
+    );
     return {
       notifications: result.notifications.map(safeNotification),
       pagination: {

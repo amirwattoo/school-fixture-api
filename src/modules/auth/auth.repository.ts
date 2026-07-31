@@ -29,7 +29,7 @@ export const authRepository = {
   findUserForLogin(email: string) {
     return prisma.systemUser.findFirst({
       where: { email: { equals: email, mode: "insensitive" } },
-      include: { school: true },
+      select: { id: true, schoolId: true, role: true, isActive: true, passwordHash: true },
     });
   },
 
@@ -47,7 +47,7 @@ export const authRepository = {
   findUserWithPassword(userId: string, schoolId: string) {
     return prisma.systemUser.findFirst({
       where: { id: userId, schoolId, isActive: true },
-      include: { school: true },
+      select: { id: true, passwordHash: true },
     });
   },
 
@@ -60,7 +60,13 @@ export const authRepository = {
   findRefreshToken(tokenHash: string) {
     return prisma.refreshToken.findUnique({
       where: { tokenHash },
-      include: { user: { include: { school: true } } },
+      select: {
+        id: true,
+        userId: true,
+        expiresAt: true,
+        revokedAt: true,
+        user: { select: safeUserSelect },
+      },
     });
   },
 };

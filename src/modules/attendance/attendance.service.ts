@@ -1,6 +1,8 @@
 import { ApiError } from "../../common/api-error.js";
 import type { AuditActor } from "../../common/audit.js";
 import { parseDateOnly } from "../../common/date-only.js";
+import { databasePhase } from "../../common/request-timing.js";
+import { referenceCache } from "../../common/reference-cache.js";
 import {
   attendanceRepository,
   type AttendanceRecordInput,
@@ -11,9 +13,19 @@ export const attendanceService = {
   async list(schoolId: string, dateValue: string) {
     const date = parseDateOnly(dateValue);
     const [records, activeTeacherCount, school] = await Promise.all([
-      attendanceRepository.list(schoolId, date),
-      attendanceRepository.activeTeacherCount(schoolId),
-      attendanceRepository.schoolSettings(schoolId),
+      databasePhase("attendance-list", () =>
+        attendanceRepository.list(schoolId, date),
+      ),
+      referenceCache.getOrLoad("teacher-count", schoolId, "active", () =>
+        databasePhase("attendance-active-teacher-count", () =>
+          attendanceRepository.activeTeacherCount(schoolId),
+        ),
+      ),
+      referenceCache.getOrLoad("school-settings", schoolId, "attendance", () =>
+        databasePhase("attendance-school-settings", () =>
+          attendanceRepository.schoolSettings(schoolId),
+        ),
+      ),
     ]);
     if (!school)
       throw new ApiError(404, "SCHOOL_NOT_FOUND", "School was not found");

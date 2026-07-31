@@ -39,30 +39,38 @@ export const fixtureRecordsRepository = {
       from?: Date;
       to?: Date;
       status?: FixtureStatus;
+      page: number;
+      pageSize: number;
     },
   ) {
     const dateFilter: Prisma.DateTimeFilter | undefined =
       filters.from || filters.to
         ? { gte: filters.from, lte: filters.to }
         : undefined;
-    return prisma.proxyFixture.findMany({
-      where: {
-        schoolId,
-        assignedTeacherId: teacherId,
-        date: dateFilter,
-        status: filters.status,
-      },
-      include: {
-        classSection: {
-          select: { id: true, name: true, gradeNumber: true, section: true },
+    const where = {
+      schoolId,
+      assignedTeacherId: teacherId,
+      date: dateFilter,
+      status: filters.status,
+    } satisfies Prisma.ProxyFixtureWhereInput;
+    return prisma.$transaction([
+      prisma.proxyFixture.findMany({
+        where,
+        include: {
+          classSection: {
+            select: { id: true, name: true, gradeNumber: true, section: true },
+          },
+          subject: { select: { id: true, name: true, code: true } },
+          absentTeacher: {
+            select: { id: true, name: true, employeeCode: true },
+          },
         },
-        subject: { select: { id: true, name: true, code: true } },
-        absentTeacher: {
-          select: { id: true, name: true, employeeCode: true },
-        },
-      },
-      orderBy: [{ date: "desc" }, { periodNumber: "asc" }],
-    });
+        orderBy: [{ date: "desc" }, { periodNumber: "asc" }],
+        skip: (filters.page - 1) * filters.pageSize,
+        take: filters.pageSize,
+      }),
+      prisma.proxyFixture.count({ where }),
+    ]);
   },
 
   attendance(
@@ -70,21 +78,33 @@ export const fixtureRecordsRepository = {
     filters: {
       from?: Date;
       to?: Date;
+      page: number;
+      pageSize: number;
     },
   ) {
     const date =
       filters.from || filters.to
         ? { gte: filters.from, lte: filters.to }
         : undefined;
-    return prisma.dailyAttendance.findMany({
-      where: { schoolId, date, status: { not: "PRESENT" } },
-      include: {
-        teacher: {
-          select: { id: true, name: true, employeeCode: true },
+    const where = {
+      schoolId,
+      date,
+      status: { not: "PRESENT" as const },
+    } satisfies Prisma.DailyAttendanceWhereInput;
+    return prisma.$transaction([
+      prisma.dailyAttendance.findMany({
+        where,
+        include: {
+          teacher: {
+            select: { id: true, name: true, employeeCode: true },
+          },
         },
-      },
-      orderBy: [{ date: "desc" }, { teacher: { name: "asc" } }],
-    });
+        orderBy: [{ date: "desc" }, { teacher: { name: "asc" } }],
+        skip: (filters.page - 1) * filters.pageSize,
+        take: filters.pageSize,
+      }),
+      prisma.dailyAttendance.count({ where }),
+    ]);
   },
 
   attendanceFixtureCounts(
@@ -98,9 +118,10 @@ export const fixtureRecordsRepository = {
       filters.from || filters.to
         ? { gte: filters.from, lte: filters.to }
         : undefined;
-    return prisma.proxyFixture.findMany({
+    return prisma.proxyFixture.groupBy({
+      by: ["date", "absentTeacherId"],
       where: { schoolId, date },
-      select: { date: true, absentTeacherId: true },
+      _count: true,
     });
   },
 

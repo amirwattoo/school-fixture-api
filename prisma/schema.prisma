@@ -159,6 +159,7 @@ model MasterTimetable {
   @@index([schoolId, dayOfWeek, periodNumber])
   @@index([schoolId, teacherId, dayOfWeek, periodNumber])
   @@index([schoolId, classSectionId, dayOfWeek, periodNumber])
+  @@index([schoolId, subjectId, dayOfWeek, periodNumber])
   @@index([teacherId, dayOfWeek])
   @@index([classSectionId, dayOfWeek])
   @@map("master_timetable")
@@ -285,7 +286,9 @@ model WhatsAppNotification {
   teacher             Teacher        @relation(fields: [teacherId], references: [id], onDelete: Restrict)
 
   @@index([schoolId, status])
+  @@index([schoolId, status, createdAt])
   @@index([schoolId, createdAt])
+  @@index([schoolId, teacherId, createdAt])
   @@index([fixtureId])
   @@index([teacherId])
   @@map("whatsapp_notifications")

@@ -1,6 +1,7 @@
 import bcrypt from "bcrypt";
 
 import { ApiError } from "../../common/api-error.js";
+import { databasePhase } from "../../common/request-timing.js";
 import { prisma } from "../../prisma/client.js";
 import { authRepository, safeUserSelect } from "./auth.repository.js";
 import {
@@ -45,7 +46,9 @@ const issueSession = async (user: {
 
 export const authService = {
   async login(email: string, password: string) {
-    const user = await authRepository.findUserForLogin(email);
+    const user = await databasePhase("auth-load-login-user", () =>
+      authRepository.findUserForLogin(email),
+    );
     const passwordMatches = await bcrypt.compare(
       password,
       user?.passwordHash ?? DUMMY_PASSWORD_HASH,
@@ -59,29 +62,35 @@ export const authService = {
       );
     }
 
-    const session = await issueSession(user);
-    const safeUser = await prisma.systemUser.update({
-      where: { id: user.id },
-      data: { lastLoginAt: new Date() },
-      select: safeUserSelect,
-    });
-
-    await prisma.auditLog.create({
-      data: {
-        schoolId: user.schoolId,
-        userId: user.id,
-        action: "LOGIN",
-        entityType: "SystemUser",
-        entityId: user.id,
-      },
-    });
+    const [session, safeUser] = await Promise.all([
+      databasePhase("auth-create-session", () => issueSession(user)),
+      databasePhase("auth-login-profile-write", async () => {
+        const updated = await prisma.systemUser.update({
+          where: { id: user.id },
+          data: { lastLoginAt: new Date() },
+          select: safeUserSelect,
+        });
+        await prisma.auditLog.create({
+          data: {
+            schoolId: user.schoolId,
+            userId: user.id,
+            action: "LOGIN",
+            entityType: "SystemUser",
+            entityId: user.id,
+          },
+        });
+        return updated;
+      }),
+    ]);
 
     return { ...session, user: safeUser };
   },
 
   async refresh(rawToken: string) {
     const payload = verifyRefreshToken(rawToken);
-    const stored = await authRepository.findRefreshToken(hashToken(rawToken));
+    const stored = await databasePhase("auth-load-refresh-token", () =>
+      authRepository.findRefreshToken(hashToken(rawToken)),
+    );
 
     if (
       !stored ||
@@ -103,26 +112,25 @@ export const authService = {
       Date.now() + refreshLifetimeSeconds * 1000,
     );
 
-    await prisma.$transaction([
-      prisma.refreshToken.update({
-        where: { id: stored.id },
-        data: { revokedAt: new Date() },
-      }),
-      prisma.refreshToken.create({
-        data: {
-          userId: stored.userId,
-          tokenHash: hashToken(replacement.refreshToken),
-          expiresAt: replacementExpiry,
-        },
-      }),
-    ]);
+    await databasePhase("auth-rotate-refresh-token", () =>
+      prisma.$transaction([
+        prisma.refreshToken.update({
+          where: { id: stored.id },
+          data: { revokedAt: new Date() },
+        }),
+        prisma.refreshToken.create({
+          data: {
+            userId: stored.userId,
+            tokenHash: hashToken(replacement.refreshToken),
+            expiresAt: replacementExpiry,
+          },
+        }),
+      ]),
+    );
 
     return {
       ...replacement,
-      user: await authRepository.findActiveUser(
-        stored.userId,
-        stored.user.schoolId,
-      ),
+      user: stored.user,
     };
   },
 
@@ -135,7 +143,9 @@ export const authService = {
   },
 
   async me(userId: string, schoolId: string) {
-    const user = await authRepository.findActiveUser(userId, schoolId);
+    const user = await databasePhase("auth-current-user", () =>
+      authRepository.findActiveUser(userId, schoolId),
+    );
     if (!user) {
       throw new ApiError(401, "UNAUTHORIZED", "User account is unavailable");
     }

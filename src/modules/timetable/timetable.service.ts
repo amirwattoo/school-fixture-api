@@ -2,6 +2,8 @@ import { Prisma, type DayOfWeek } from "@prisma/client";
 
 import { ApiError } from "../../common/api-error.js";
 import { type AuditActor, createAuditLog } from "../../common/audit.js";
+import { databasePhase } from "../../common/request-timing.js";
+import { referenceCache } from "../../common/reference-cache.js";
 import { weekdayOrder } from "../../common/school-data.js";
 import { timetableRepository } from "./timetable.repository.js";
 
@@ -145,7 +147,15 @@ export const timetableService = {
       subjectId?: string;
     },
   ) {
-    const entries = await timetableRepository.list(schoolId, filters);
+    const entries = await referenceCache.getOrLoad(
+      "timetable",
+      schoolId,
+      JSON.stringify(filters),
+      () =>
+        databasePhase("timetable-list", () =>
+          timetableRepository.list(schoolId, filters),
+        ),
+    );
     return entries.sort(
       (left, right) =>
         weekdayOrder(left.dayOfWeek) - weekdayOrder(right.dayOfWeek) ||
@@ -173,6 +183,7 @@ export const timetableService = {
         schoolId: actor.schoolId,
         ...input,
       });
+      referenceCache.invalidateSchool("timetable", actor.schoolId);
       await createAuditLog(
         actor,
         "TIMETABLE_ENTRY_CREATED",
@@ -203,6 +214,7 @@ export const timetableService = {
     await validateConflicts(actor.schoolId, completeInput, entryId);
     try {
       const entry = await timetableRepository.update(entryId, completeInput);
+      referenceCache.invalidateSchool("timetable", actor.schoolId);
       await createAuditLog(
         actor,
         "TIMETABLE_ENTRY_UPDATED",
@@ -219,6 +231,7 @@ export const timetableService = {
   async delete(actor: AuditActor, entryId: string) {
     const oldEntry = await this.get(actor.schoolId, entryId);
     const entry = await timetableRepository.delete(entryId);
+    referenceCache.invalidateSchool("timetable", actor.schoolId);
     await createAuditLog(
       actor,
       "TIMETABLE_ENTRY_DELETED",

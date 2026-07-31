@@ -2,6 +2,8 @@ import { Prisma } from "@prisma/client";
 
 import { ApiError } from "../../common/api-error.js";
 import { type AuditActor, createAuditLog } from "../../common/audit.js";
+import { databasePhase } from "../../common/request-timing.js";
+import { referenceCache } from "../../common/reference-cache.js";
 import {
   buildClassName,
   deriveTeachingLevel,
@@ -35,7 +37,15 @@ export const classSectionsService = {
     schoolId: string,
     filters: { gradeNumber?: number; isActive?: boolean },
   ) {
-    return classSectionsRepository.list(schoolId, filters);
+    return referenceCache.getOrLoad(
+      "class-sections",
+      schoolId,
+      JSON.stringify(filters),
+      () =>
+        databasePhase("class-sections-list", () =>
+          classSectionsRepository.list(schoolId, filters),
+        ),
+    );
   },
 
   async get(schoolId: string, classSectionId: string) {
@@ -61,6 +71,8 @@ export const classSectionsService = {
         schoolId: actor.schoolId,
         ...derivedValues(input.gradeNumber, input.section),
       });
+      referenceCache.invalidateSchool("class-sections", actor.schoolId);
+      referenceCache.invalidateSchool("timetable", actor.schoolId);
       await createAuditLog(
         actor,
         "CLASS_SECTION_CREATED",
@@ -99,6 +111,8 @@ export const classSectionsService = {
           isActive: input.isActive,
         },
       );
+      referenceCache.invalidateSchool("class-sections", actor.schoolId);
+      referenceCache.invalidateSchool("timetable", actor.schoolId);
       await createAuditLog(
         actor,
         "CLASS_SECTION_UPDATED",
@@ -117,6 +131,8 @@ export const classSectionsService = {
     const classSection = await classSectionsRepository.update(classSectionId, {
       isActive: false,
     });
+    referenceCache.invalidateSchool("class-sections", actor.schoolId);
+    referenceCache.invalidateSchool("timetable", actor.schoolId);
     await createAuditLog(
       actor,
       "CLASS_SECTION_DISABLED",

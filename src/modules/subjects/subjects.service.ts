@@ -2,6 +2,8 @@ import { Prisma } from "@prisma/client";
 
 import { ApiError } from "../../common/api-error.js";
 import { type AuditActor, createAuditLog } from "../../common/audit.js";
+import { databasePhase } from "../../common/request-timing.js";
+import { referenceCache } from "../../common/reference-cache.js";
 import {
   normalizeCode,
   normalizeDisplayName,
@@ -34,7 +36,15 @@ const ensureCanDisable = async (subjectId: string) => {
 
 export const subjectsService = {
   list(schoolId: string, filters: { search?: string; isActive?: boolean }) {
-    return subjectsRepository.list(schoolId, filters);
+    return referenceCache.getOrLoad(
+      "subjects",
+      schoolId,
+      JSON.stringify(filters),
+      () =>
+        databasePhase("subjects-list", () =>
+          subjectsRepository.list(schoolId, filters),
+        ),
+    );
   },
 
   async get(schoolId: string, subjectId: string) {
@@ -51,6 +61,8 @@ export const subjectsService = {
         name: normalizeDisplayName(input.name),
         code: normalizeCode(input.code),
       });
+      referenceCache.invalidateSchool("subjects", actor.schoolId);
+      referenceCache.invalidateSchool("timetable", actor.schoolId);
       await createAuditLog(actor, "SUBJECT_CREATED", "Subject", subject.id, {
         new: subject,
       });
@@ -75,6 +87,8 @@ export const subjectsService = {
         code: input.code ? normalizeCode(input.code) : undefined,
         isActive: input.isActive,
       });
+      referenceCache.invalidateSchool("subjects", actor.schoolId);
+      referenceCache.invalidateSchool("timetable", actor.schoolId);
       await createAuditLog(actor, "SUBJECT_UPDATED", "Subject", subject.id, {
         old: oldSubject,
         new: subject,
@@ -91,6 +105,8 @@ export const subjectsService = {
     const subject = await subjectsRepository.update(subjectId, {
       isActive: false,
     });
+    referenceCache.invalidateSchool("subjects", actor.schoolId);
+    referenceCache.invalidateSchool("timetable", actor.schoolId);
     await createAuditLog(actor, "SUBJECT_DISABLED", "Subject", subject.id, {
       old: oldSubject,
       new: subject,

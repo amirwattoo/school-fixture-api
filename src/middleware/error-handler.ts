@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { ZodError } from "zod";
 
 import { ApiError } from "../common/api-error.js";
+import { recordRequestPrismaError } from "../common/request-timing.js";
 
 export const errorHandler: ErrorRequestHandler = (
   error,
@@ -11,6 +12,7 @@ export const errorHandler: ErrorRequestHandler = (
   _next,
 ) => {
   void _next;
+  recordRequestPrismaError(error);
 
   if (error instanceof ApiError) {
     response.status(error.statusCode).json({

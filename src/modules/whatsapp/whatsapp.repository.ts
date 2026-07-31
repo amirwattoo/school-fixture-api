@@ -13,7 +13,6 @@ export type NotificationFilters = {
 };
 
 export const notificationInclude = {
-  school: { select: { id: true, name: true, timezone: true } },
   teacher: {
     select: {
       id: true,

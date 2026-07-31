@@ -784,6 +784,17 @@ test("weekly, yearly, and teacher history records reflect committed workloads", 
         fixture.id === firstFixtureId && fixture.isManuallyOverridden,
     ),
   );
+  const pagedHistory = await request<{
+    fixtures: Array<{ id: string }>;
+    pagination: { page: number; pageSize: number; total: number };
+  }>(
+    `/api/v1/records/teachers/${ids.get("CAN-B")}?year=${year}&page=1&pageSize=1`,
+    { headers: auth() },
+  );
+  assert.equal(pagedHistory.response.status, 200);
+  assert.equal(pagedHistory.body.data?.fixtures.length, 1);
+  assert.equal(pagedHistory.body.data?.pagination.pageSize, 1);
+  assert.ok((pagedHistory.body.data?.pagination.total ?? 0) >= 1);
 });
 
 test("both roles can access Phase 4 APIs", async () => {

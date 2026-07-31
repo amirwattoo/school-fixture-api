@@ -2,6 +2,8 @@ import { Prisma } from "@prisma/client";
 
 import { ApiError } from "../../common/api-error.js";
 import { type AuditActor, createAuditLog } from "../../common/audit.js";
+import { databasePhase } from "../../common/request-timing.js";
+import { referenceCache } from "../../common/reference-cache.js";
 import {
   cleanSpecializations,
   normalizeCode,
@@ -48,12 +50,21 @@ const normalizeWhitespaceName = (name: string) =>
 
 export const teachersService = {
   list(schoolId: string, filters: TeacherFilters) {
-    return teachersRepository.list(schoolId, {
+    const normalizedFilters = {
       ...filters,
       subject: filters.subject
         ? normalizeDisplayName(filters.subject)
         : undefined,
-    });
+    };
+    return referenceCache.getOrLoad(
+      "teachers",
+      schoolId,
+      JSON.stringify(normalizedFilters),
+      () =>
+        databasePhase("teachers-list", () =>
+          teachersRepository.list(schoolId, normalizedFilters),
+        ),
+    );
   },
 
   async get(schoolId: string, teacherId: string) {
@@ -69,6 +80,10 @@ export const teachersService = {
         schoolId: actor.schoolId,
         ...normalizedInput(input),
       });
+      referenceCache.invalidateSchool("teachers", actor.schoolId);
+      referenceCache.invalidateSchool("records-teachers", actor.schoolId);
+      referenceCache.invalidateSchool("teacher-count", actor.schoolId);
+      referenceCache.invalidateSchool("timetable", actor.schoolId);
       await createAuditLog(actor, "TEACHER_CREATED", "Teacher", teacher.id, {
         new: teacher,
       });
@@ -100,6 +115,10 @@ export const teachersService = {
         teachingLevel: input.teachingLevel,
         isActive: input.isActive,
       });
+      referenceCache.invalidateSchool("teachers", actor.schoolId);
+      referenceCache.invalidateSchool("records-teachers", actor.schoolId);
+      referenceCache.invalidateSchool("teacher-count", actor.schoolId);
+      referenceCache.invalidateSchool("timetable", actor.schoolId);
       await createAuditLog(actor, "TEACHER_UPDATED", "Teacher", teacher.id, {
         old: oldTeacher,
         new: teacher,
@@ -115,6 +134,10 @@ export const teachersService = {
     const teacher = await teachersRepository.update(teacherId, {
       isActive: false,
     });
+    referenceCache.invalidateSchool("teachers", actor.schoolId);
+    referenceCache.invalidateSchool("records-teachers", actor.schoolId);
+    referenceCache.invalidateSchool("teacher-count", actor.schoolId);
+    referenceCache.invalidateSchool("timetable", actor.schoolId);
     await createAuditLog(actor, "TEACHER_DISABLED", "Teacher", teacher.id, {
       old: oldTeacher,
       new: teacher,

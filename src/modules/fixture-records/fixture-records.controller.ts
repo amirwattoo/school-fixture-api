@@ -44,9 +44,9 @@ export const teacherHistory: RequestHandler = async (request, response) => {
 
 export const attendanceRecords: RequestHandler = async (request, response) => {
   const query = attendanceReportSchema.parse(request.query);
-  const records = await fixtureRecordsService.attendance(
+  const data = await fixtureRecordsService.attendance(
     request.auth!.schoolId,
     query,
   );
-  sendSuccess(response, { records }, "Attendance exception records retrieved");
+  sendSuccess(response, data, "Attendance exception records retrieved");
 };
