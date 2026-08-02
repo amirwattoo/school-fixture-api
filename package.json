@@ -9,13 +9,14 @@
     "lint": "eslint src --ext .ts",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.test.json --noEmit",
-    "test": "node --import ./tests/tsx-windows-preload.mjs --import tsx --test tests/auth.test.ts tests/phase3.test.ts tests/phase4.test.ts tests/phase5.test.ts tests/timetable-import.test.ts tests/fixture-rules.test.ts tests/performance.test.ts",
+    "test": "node --import ./tests/tsx-windows-preload.mjs --import tsx --test tests/auth.test.ts tests/phase3.test.ts tests/phase4.test.ts tests/phase5.test.ts tests/timetable-import.test.ts tests/timetable-upload.test.ts tests/timetable-upload-parser.test.ts tests/fixture-rules.test.ts tests/performance.test.ts",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "prisma:seed": "node --import ./tests/tsx-windows-preload.mjs --import tsx prisma/seed.ts",
     "timetable:parse": "node --import ./tests/tsx-windows-preload.mjs --import tsx scripts/parse-official-timetable.ts",
-    "timetable:import": "node --import ./tests/tsx-windows-preload.mjs --import tsx scripts/import-official-timetable.ts"
+    "timetable:import": "node --import ./tests/tsx-windows-preload.mjs --import tsx scripts/import-official-timetable.ts",
+    "admin:update-email": "node --import ./tests/tsx-windows-preload.mjs --import tsx scripts/update-intended-admin-email.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.15.0",
@@ -26,15 +27,19 @@
     "express": "^5.1.0",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
+    "multer": "^2.2.0",
+    "nodemailer": "^9.0.3",
     "zod": "^4.1.5"
   },
   "devDependencies": {
     "@types/bcrypt": "^5.0.2",
-    "@types/cors": "^2.8.19",
     "@types/cookie-parser": "^1.4.9",
+    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
     "@types/jsonwebtoken": "^9.0.10",
+    "@types/multer": "^2.2.0",
     "@types/node": "^24.13.3",
+    "@types/nodemailer": "^8.0.1",
     "prisma": "^6.15.0",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"

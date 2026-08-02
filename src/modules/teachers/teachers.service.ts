@@ -21,6 +21,7 @@ type TeacherInput = {
   whatsappNumber?: string | null;
   subjectSpecializations: string[];
   teachingLevel: "LOWER" | "HIGHER" | "BOTH";
+  baseWeeklyTeachingPeriods: number;
 };
 
 const handleDuplicate = (error: unknown): never => {
@@ -43,6 +44,7 @@ const normalizedInput = (input: TeacherInput) => ({
   whatsappNumber: normalizePakistaniWhatsAppNumber(input.whatsappNumber),
   subjectSpecializations: cleanSpecializations(input.subjectSpecializations),
   teachingLevel: input.teachingLevel,
+  baseWeeklyTeachingPeriods: input.baseWeeklyTeachingPeriods,
 });
 
 const normalizeWhitespaceName = (name: string) =>
@@ -113,6 +115,7 @@ export const teachersService = {
           ? cleanSpecializations(input.subjectSpecializations)
           : undefined,
         teachingLevel: input.teachingLevel,
+        baseWeeklyTeachingPeriods: input.baseWeeklyTeachingPeriods,
         isActive: input.isActive,
       });
       referenceCache.invalidateSchool("teachers", actor.schoolId);

@@ -6,7 +6,7 @@ import bcrypt from "bcrypt";
 
 import { createApp } from "../src/app.js";
 import { prisma } from "../src/prisma/client.js";
-import { verifyAccessToken } from "../src/modules/auth/token.service.js";
+import { hashToken, verifyAccessToken } from "../src/modules/auth/token.service.js";
 
 const TEST_SCHOOL_ID = "phase-2-auth-test-school";
 const OTHER_SCHOOL_ID = "phase-2-other-school";
@@ -228,6 +228,48 @@ test("logout revokes the presented refresh token", async () => {
     headers: { Cookie: cookie },
   });
   assert.equal(refreshResult.response.status, 401);
+});
+
+test("forgot password uses the same generic response for known and unknown email", async () => {
+  for (const email of ["principal.auth-test@example.local", "unknown.auth-test@example.local"]) {
+    const result = await request<Record<string, never>>("/api/v1/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) });
+    assert.equal(result.response.status, 200);
+    assert.equal(result.body.success, true);
+  }
+});
+
+test("a valid password reset is one-time and revokes existing refresh sessions", async () => {
+  const session = await login("principal.auth-test@example.local");
+  const cookie = cookieFrom(session.response);
+  const rawToken = "valid-password-reset-token-with-enough-entropy-123456789";
+  await prisma.passwordResetToken.create({ data: { userId: principalId, schoolId: TEST_SCHOOL_ID, tokenHash: hashToken(rawToken), expiresAt: new Date(Date.now() + 60_000) } });
+  const reset = await request("/api/v1/auth/reset-password", { method: "POST", body: JSON.stringify({ token: rawToken, newPassword: "NewTesting123!" }) });
+  assert.equal(reset.response.status, 200);
+  const reuse = await request("/api/v1/auth/reset-password", { method: "POST", body: JSON.stringify({ token: rawToken, newPassword: "AnotherTesting123!" }) });
+  assert.equal(reuse.response.status, 400);
+  assert.equal(reuse.body.error?.code, "INVALID_RESET_TOKEN");
+  const refresh = await request("/api/v1/auth/refresh", { method: "POST", headers: { Cookie: cookie } });
+  assert.equal(refresh.response.status, 401);
+  const relogin = await login("principal.auth-test@example.local", "NewTesting123!");
+  assert.equal(relogin.response.status, 200);
+  await prisma.systemUser.update({ where: { id: principalId }, data: { passwordHash: await bcrypt.hash(PASSWORD, 12) } });
+});
+
+test("expired password reset tokens are rejected", async () => {
+  const rawToken = "expired-password-reset-token-with-enough-entropy-123456";
+  await prisma.passwordResetToken.create({ data: { userId: principalId, schoolId: TEST_SCHOOL_ID, tokenHash: hashToken(rawToken), expiresAt: new Date(Date.now() - 1_000) } });
+  const result = await request("/api/v1/auth/reset-password", { method: "POST", body: JSON.stringify({ token: rawToken, newPassword: "ExpiredTesting123!" }) });
+  assert.equal(result.response.status, 400);
+  assert.equal(result.body.error?.code, "INVALID_RESET_TOKEN");
+});
+
+test("forgot password requests are rate limited without changing the generic success body", async () => {
+  let status = 0;
+  for (let index = 0; index < 6; index += 1) {
+    const result = await request("/api/v1/auth/forgot-password", { method: "POST", body: JSON.stringify({ email: "rate-limit.auth-test@example.local" }) });
+    status = result.response.status;
+  }
+  assert.equal(status, 429);
 });
 
 test("Principal can create a Timetable Incharge without exposing passwordHash", async () => {

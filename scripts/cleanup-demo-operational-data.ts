@@ -2,7 +2,7 @@ import type { Prisma } from "@prisma/client";
 
 import { prisma } from "../src/prisma/client.js";
 
-const PRINCIPAL_EMAIL = "principal@fgps2.local";
+const PRINCIPAL_EMAIL = "amirwattoo831@gmail.com";
 const OPERATIONAL_AUDIT_ENTITY_TYPES = [
   "ProxyFixture",
   "WhatsAppNotification",

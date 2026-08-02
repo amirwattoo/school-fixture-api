@@ -49,6 +49,12 @@ enum WhatsAppStatus {
   MANUALLY_CONFIRMED
 }
 
+enum TimetableImportStatus {
+  PREVIEWED
+  IMPORTED
+  FAILED
+}
+
 model School {
   id                    String                  @id @default(cuid())
   name                  String
@@ -67,6 +73,8 @@ model School {
   proxyFixtures         ProxyFixture[]
   fixtureSummaries      TeacherFixtureSummary[]
   whatsappNotifications WhatsAppNotification[]
+  passwordResetTokens   PasswordResetToken[]
+  timetableImports      TimetableImportBatch[]
   createdAt             DateTime                @default(now())
   updatedAt             DateTime                @updatedAt
 
@@ -166,23 +174,25 @@ model MasterTimetable {
 }
 
 model SystemUser {
-  id                 String            @id @default(cuid())
-  schoolId           String
-  school             School            @relation(fields: [schoolId], references: [id], onDelete: Cascade)
-  name               String
-  email              String
-  passwordHash       String
-  role               UserRole
-  isActive           Boolean           @default(true)
-  mustChangePassword Boolean           @default(true)
-  lastLoginAt        DateTime?
-  refreshTokens      RefreshToken[]
-  auditLogs          AuditLog[]
-  markedAttendances  DailyAttendance[]
-  overriddenFixtures ProxyFixture[]    @relation("OverriddenFixtures")
-  publishedFixtures  ProxyFixture[]    @relation("PublishedFixtures")
-  createdAt          DateTime          @default(now())
-  updatedAt          DateTime          @updatedAt
+  id                  String                 @id @default(cuid())
+  schoolId            String
+  school              School                 @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  name                String
+  email               String
+  passwordHash        String
+  role                UserRole
+  isActive            Boolean                @default(true)
+  mustChangePassword  Boolean                @default(true)
+  lastLoginAt         DateTime?
+  refreshTokens       RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
+  timetableImports    TimetableImportBatch[]
+  auditLogs           AuditLog[]
+  markedAttendances   DailyAttendance[]
+  overriddenFixtures  ProxyFixture[]         @relation("OverriddenFixtures")
+  publishedFixtures   ProxyFixture[]         @relation("PublishedFixtures")
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
 
   @@unique([schoolId, email])
   @@index([email])
@@ -342,4 +352,47 @@ model AuditLog {
   @@index([schoolId, createdAt])
   @@index([userId])
   @@map("audit_logs")
+}
+
+model PasswordResetToken {
+  id              String     @id @default(cuid())
+  userId          String
+  schoolId        String
+  tokenHash       String     @unique
+  expiresAt       DateTime
+  usedAt          DateTime?
+  requestedIpHash String?
+  userAgentHash   String?
+  createdAt       DateTime   @default(now())
+  user            SystemUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  school          School     @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  @@index([tokenHash, expiresAt, usedAt])
+  @@index([userId, createdAt])
+  @@index([schoolId, createdAt])
+  @@map("password_reset_tokens")
+}
+
+model TimetableImportBatch {
+  id               String                @id @default(cuid())
+  schoolId         String
+  createdById      String
+  status           TimetableImportStatus @default(PREVIEWED)
+  originalFileName String
+  fileType         String
+  fileHash         String
+  preview          Json
+  previousSnapshot Json?
+  importedRows     Int                   @default(0)
+  warningCount     Int                   @default(0)
+  errorCount       Int                   @default(0)
+  importedAt       DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  school           School                @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  createdBy        SystemUser            @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([schoolId, createdAt])
+  @@index([schoolId, status, createdAt])
+  @@map("timetable_import_batches")
 }

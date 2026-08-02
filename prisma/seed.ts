@@ -30,7 +30,7 @@ const seed = async () => {
 
   const users = [
     {
-      email: "principal@fgps2.local",
+      email: "amirwattoo831@gmail.com",
       name: "Principal",
       role: "PRINCIPAL" as const,
     },
@@ -40,6 +40,25 @@ const seed = async () => {
       role: "TIMETABLE_INCHARGE" as const,
     },
   ];
+
+  const seededPrincipals = await prisma.systemUser.findMany({
+    where: {
+      schoolId: school.id,
+      role: "PRINCIPAL",
+      email: { in: ["principal@fgps2.local", "amirwattoo831@gmail.com"] },
+    },
+    select: { id: true },
+    take: 2,
+  });
+  if (seededPrincipals.length > 1) {
+    throw new Error("Refused to merge duplicate seeded principal accounts automatically");
+  }
+  if (seededPrincipals[0]) {
+    await prisma.systemUser.update({
+      where: { id: seededPrincipals[0].id },
+      data: { email: "amirwattoo831@gmail.com" },
+    });
+  }
 
   for (const user of users) {
     await prisma.systemUser.upsert({

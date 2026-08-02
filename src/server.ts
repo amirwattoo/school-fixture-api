@@ -5,7 +5,7 @@ const app = createApp();
 
 const server = app.listen(env.API_PORT, () => {
   console.log(
-    `School Fixture API listening on http://localhost:${env.API_PORT}`,
+    `Proxy Management API listening on http://localhost:${env.API_PORT}`,
   );
 });
 

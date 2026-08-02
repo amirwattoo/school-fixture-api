@@ -15,6 +15,7 @@ import { fixturesRouter } from "./modules/fixtures/fixtures.routes.js";
 import { subjectsRouter } from "./modules/subjects/subjects.routes.js";
 import { teachersRouter } from "./modules/teachers/teachers.routes.js";
 import { timetableRouter } from "./modules/timetable/timetable.routes.js";
+import { timetableUploadRouter } from "./modules/timetable-import/timetable-upload.routes.js";
 import { usersRouter } from "./modules/users/users.routes.js";
 import { whatsappRouter } from "./modules/whatsapp/whatsapp.routes.js";
 import { healthRouter } from "./routes/health.routes.js";
@@ -42,6 +43,7 @@ export const createApp = () => {
   app.use("/api/v1/subjects", subjectsRouter);
   app.use("/api/v1/class-sections", classSectionsRouter);
   app.use("/api/v1/timetable", timetableRouter);
+  app.use("/api/v1/timetable-imports", timetableUploadRouter);
   app.use("/api/v1/attendance", attendanceRouter);
   app.use("/api/v1/fixtures", fixturesRouter);
   app.use("/api/v1/records", fixtureRecordsRouter);

@@ -31,6 +31,7 @@ export const createTeacherSchema = z.object({
     .max(30)
     .default([]),
   teachingLevel: teachingLevelSchema,
+  baseWeeklyTeachingPeriods: z.number().int().min(0).max(100).default(0),
 });
 
 export const updateTeacherSchema = z
@@ -43,6 +44,7 @@ export const updateTeacherSchema = z
       .max(30)
       .optional(),
     teachingLevel: teachingLevelSchema.optional(),
+    baseWeeklyTeachingPeriods: z.number().int().min(0).max(100).optional(),
     isActive: z.boolean().optional(),
   })
   .refine((value) => Object.keys(value).length > 0, {

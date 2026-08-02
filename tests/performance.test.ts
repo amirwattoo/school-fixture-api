@@ -52,3 +52,15 @@ test("reference cache remains bounded", async () => {
   }
   assert.equal(referenceCache.size(), 200);
 });
+
+test("school reference request coalescing has a measured local latency benefit", async () => {
+  const loader = async () => { await new Promise((resolve) => setTimeout(resolve, 8)); return true; };
+  let started = performance.now();
+  for (let index = 0; index < 20; index += 1) await loader();
+  const uncachedMs = performance.now() - started;
+  started = performance.now();
+  await Promise.all(Array.from({ length: 20 }, () => referenceCache.getOrLoad("measured", "school-a", "stable", loader)));
+  const coalescedMs = performance.now() - started;
+  console.info("[local-cache-benchmark]", { uncachedMs: Number(uncachedMs.toFixed(2)), coalescedMs: Number(coalescedMs.toFixed(2)) });
+  assert.ok(coalescedMs < uncachedMs / 5);
+});

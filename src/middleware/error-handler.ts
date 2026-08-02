@@ -84,7 +84,11 @@ export const errorHandler: ErrorRequestHandler = (
     }
   }
 
-  console.error(error);
+  console.error("[request-error]", {
+    type: error instanceof Error ? error.name : "UnknownError",
+    prismaCode:
+      error instanceof Prisma.PrismaClientKnownRequestError ? error.code : null,
+  });
   response.status(500).json({
     success: false,
     error: {

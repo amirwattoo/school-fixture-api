@@ -29,6 +29,14 @@ const envSchema = z
       .enum(["true", "false"])
       .default("false")
       .transform((value) => value === "true"),
+    EMAIL_PROVIDER: z.enum(["mock", "smtp"]).default("mock"),
+    EMAIL_FROM: z.string().default("Proxy Management <no-reply@example.invalid>"),
+    SMTP_HOST: z.string().optional().default(""),
+    SMTP_PORT: z.coerce.number().int().positive().default(587),
+    SMTP_SECURE: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+    SMTP_USER: z.string().optional().default(""),
+    SMTP_PASSWORD: z.string().optional().default(""),
+    PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(60).default(30),
     WHATSAPP_PROVIDER: z.enum(["mock", "meta"]).default("mock"),
     WHATSAPP_ACCESS_TOKEN: z.string().optional().default(""),
     WHATSAPP_PHONE_NUMBER_ID: z.string().optional().default(""),
@@ -41,6 +49,9 @@ const envSchema = z
     WHATSAPP_TEMPLATE_LANGUAGE: z.string().default("en"),
   })
   .superRefine((value, context) => {
+    if (value.EMAIL_PROVIDER === "smtp" && (!value.SMTP_HOST.trim() || !value.SMTP_USER.trim() || !value.SMTP_PASSWORD)) {
+      context.addIssue({ code: "custom", path: ["SMTP_HOST"], message: "SMTP host and credentials are required when EMAIL_PROVIDER=smtp" });
+    }
     if (value.WHATSAPP_PROVIDER !== "meta") return;
     for (const key of [
       "WHATSAPP_ACCESS_TOKEN",
