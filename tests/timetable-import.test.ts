@@ -146,6 +146,7 @@ const uploadRow = (teacherName: string, className: string, rowNumber: number): U
   periodNumber: 4,
   className,
   teacherName,
+  sourceTeacherRef: `src-${teacherName}`,
   subjectName: "Biology",
   subjectCode: "BIO",
   workload: 10,
@@ -155,14 +156,14 @@ const uploadRow = (teacherName: string, className: string, rowNumber: number): U
 test("upload conflicts use resolved teacher IDs instead of normalized names", () => {
   const rows = [uploadRow("Ehsan Ul Haq", "9A", 2), uploadRow("Ehsan ul Haq", "9B", 3)];
   const distinct = validatePreviewAssignments({ rows, invalidRows: [], teacherMatches: [
-    { sourceName: "Ehsan Ul Haq", status: "matched", teacherId: "teacher-one" },
-    { sourceName: "Ehsan ul Haq", status: "matched", teacherId: "teacher-two" },
+    { sourceTeacherRef: "src-Ehsan Ul Haq", sourceName: "Ehsan Ul Haq", status: "matched", teacherId: "teacher-one" },
+    { sourceTeacherRef: "src-Ehsan ul Haq", sourceName: "Ehsan ul Haq", status: "matched", teacherId: "teacher-two" },
   ] });
   assert.deepEqual(distinct.blockingErrors, []);
 
   const same = validatePreviewAssignments({ rows, invalidRows: [], teacherMatches: [
-    { sourceName: "Ehsan Ul Haq", status: "matched", teacherId: "teacher-one" },
-    { sourceName: "Ehsan ul Haq", status: "matched", teacherId: "teacher-one" },
+    { sourceTeacherRef: "src-Ehsan Ul Haq", sourceName: "Ehsan Ul Haq", status: "matched", teacherId: "teacher-one" },
+    { sourceTeacherRef: "src-Ehsan ul Haq", sourceName: "Ehsan ul Haq", status: "matched", teacherId: "teacher-one" },
   ] });
   assert.equal(same.blockingErrors.length, 2);
   assert.ok(same.blockingErrors.every((error) => error.includes("Teacher double-booking")));
@@ -171,15 +172,15 @@ test("upload conflicts use resolved teacher IDs instead of normalized names", ()
 test("ambiguous upload teachers stay blocked until mapping and are revalidated", () => {
   const rows = [uploadRow("Known Teacher", "9A", 2), uploadRow("K. Teacher", "9B", 3)];
   const preview = { rows, invalidRows: [], teacherMatches: [
-    { sourceName: "Known Teacher", status: "matched" as const, teacherId: "teacher-one" },
-    { sourceName: "K. Teacher", status: "ambiguous" as const, candidates: [
+    { sourceTeacherRef: "src-Known Teacher", sourceName: "Known Teacher", status: "matched" as const, teacherId: "teacher-one" },
+    { sourceTeacherRef: "src-K. Teacher", sourceName: "K. Teacher", status: "ambiguous" as const, candidates: [
       { id: "teacher-one", name: "Known Teacher", resolvedTeacherIdentifier: "existing:one" },
       { id: "teacher-two", name: "Other Teacher", resolvedTeacherIdentifier: "existing:two" },
     ] },
   ] };
   assert.match(validatePreviewAssignments(preview).blockingErrors[0]!, /mapping required/i);
-  assert.equal(validatePreviewAssignments(preview, { "K. Teacher": "teacher-one" }).blockingErrors.length, 2);
-  assert.deepEqual(validatePreviewAssignments(preview, { "K. Teacher": "teacher-two" }).blockingErrors, []);
+  assert.equal(validatePreviewAssignments(preview, new Map([["src-K. Teacher", "teacher-one"]])).blockingErrors.length, 2);
+  assert.deepEqual(validatePreviewAssignments(preview, new Map([["src-K. Teacher", "teacher-two"]])).blockingErrors, []);
 });
 
 before(async () => {

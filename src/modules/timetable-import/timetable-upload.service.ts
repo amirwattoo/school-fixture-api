@@ -9,9 +9,10 @@ import { referenceCache } from "../../common/reference-cache.js";
 import { prisma } from "../../prisma/client.js";
 import { expandDayExpression, extractClassTimetableText, normalizeTeacherKey, parseClassTimetableText } from "./timetable-pdf.parser.js";
 
-export type UploadRow = { dayOfWeek: DayOfWeek; periodNumber: number; className: string; teacherName: string; subjectName: string; subjectCode: string; workload?: number; rowNumber: number };
+export type UploadRow = { dayOfWeek: DayOfWeek; periodNumber: number; className: string; teacherName: string; sourceTeacherRef: string; subjectName: string; subjectCode: string; workload?: number; rowNumber: number };
 type InvalidUploadRow = { rowNumber: number; className: string; day: string; lesson: string; subjectName: string; teacherName: string; message: string };
-export type PreviewTeacherMatch = { sourceName: string; status: "matched" | "new" | "ambiguous"; teacherId?: string; temporaryIdentity?: string; resolvedTeacherIdentifier?: string; candidates?: Array<{ id: string; name: string; resolvedTeacherIdentifier: string }>; workload?: number };
+export type PreviewTeacherMatch = { sourceTeacherRef: string; sourceName: string; status: "matched" | "new" | "ambiguous"; teacherId?: string; temporaryIdentity?: string; resolvedTeacherIdentifier?: string; candidates?: Array<{ id: string; name: string; resolvedTeacherIdentifier: string }>; workload?: number };
+export type TeacherMappingInput = { sourceTeacherRef: string; sourceTeacherName: string; resolvedTeacherId?: string };
 type PreviewData = { rows: UploadRow[]; totals: Record<string, number>; detected: Record<string, unknown>; teacherMatches: PreviewTeacherMatch[]; duplicateRows: number[]; invalidRows: InvalidUploadRow[]; warnings: string[]; blockingErrors: string[]; affectedFixtureCount: number };
 
 const splitCsvLine = (line: string) => {
@@ -31,6 +32,18 @@ const splitCsvLine = (line: string) => {
   return cells;
 };
 
+const sourceTeacherRef = (sourceName: string, occurrence: number) => `src_teacher_${createHash("sha256").update(`${sourceName}\u0000${occurrence}`).digest("hex").slice(0, 24)}`;
+const createSourceTeacherRegistry = () => {
+  const sources: Array<{ sourceName: string; ref: string }> = [];
+  return (sourceName: string) => {
+    const existing = sources.find((source) => source.sourceName === sourceName);
+    if (existing) return existing.ref;
+    const ref = sourceTeacherRef(sourceName, sources.length + 1);
+    sources.push({ sourceName, ref });
+    return ref;
+  };
+};
+
 export const parseTimetableCsv = (buffer: Buffer): { rows: UploadRow[]; invalidRows: PreviewData["invalidRows"] } => {
   const text = buffer.toString("utf8").replace(/^\uFEFF/, "");
   const lines = text.split(/\r?\n/).filter((line) => line.trim());
@@ -41,6 +54,7 @@ export const parseTimetableCsv = (buffer: Buffer): { rows: UploadRow[]; invalidR
   if ([indexes.day, indexes.period, indexes.className, indexes.teacher, indexes.subject].some((index) => index < 0)) throw new ApiError(400, "INVALID_CSV_HEADERS", "CSV requires day, period, class, teacher, and subject columns");
   const rows: UploadRow[] = [];
   const invalidRows: PreviewData["invalidRows"] = [];
+  const teacherRefFor = createSourceTeacherRegistry();
   lines.slice(1).forEach((line, offset) => {
     const rowNumber = offset + 2;
     let cells: string[] = [];
@@ -53,7 +67,8 @@ export const parseTimetableCsv = (buffer: Buffer): { rows: UploadRow[]; invalidR
       const subjectCode = indexes.subjectCode >= 0 ? cells[indexes.subjectCode]?.trim() || subjectName : subjectName;
       const workloadValue = indexes.workload >= 0 && cells[indexes.workload] ? Number(cells[indexes.workload]) : undefined;
       if (!Number.isInteger(periodNumber) || periodNumber < 1 || !className || !teacherName || !subjectName || (workloadValue !== undefined && (!Number.isInteger(workloadValue) || workloadValue < 0))) throw new Error("Missing or invalid period, class, teacher, subject, or workload");
-      for (const dayOfWeek of expandDayExpression(cells[indexes.day]!.replace(/[–—]/g, "-"))) rows.push({ dayOfWeek, periodNumber, className, teacherName, subjectName, subjectCode, workload: workloadValue, rowNumber });
+      const ref = teacherRefFor(teacherName);
+      for (const dayOfWeek of expandDayExpression(cells[indexes.day]!.replace(/[–—]/g, "-"))) rows.push({ dayOfWeek, periodNumber, className, teacherName, sourceTeacherRef: ref, subjectName, subjectCode, workload: workloadValue, rowNumber });
     } catch (error) {
       invalidRows.push({
         rowNumber,
@@ -75,7 +90,8 @@ const rowsFromPdf = async (buffer: Buffer): Promise<{ rows: UploadRow[]; invalid
   try {
     await writeFile(path, buffer, { flag: "wx" });
     const parsed = parseClassTimetableText(extractClassTimetableText(path));
-    return { rows: parsed.records.map((row, index) => ({ dayOfWeek: row.dayOfWeek, periodNumber: row.periodNumber, className: row.className, teacherName: row.teacherName, subjectName: row.subjectCode, subjectCode: row.subjectCode, rowNumber: index + 1 })), invalidRows: parsed.malformedCells.map((cell) => ({ rowNumber: cell.periodNumber, className: cell.className, day: "(PDF)", lesson: String(cell.periodNumber), subjectName: cell.sourceCellText, teacherName: "(unresolved)", message: cell.reason })) };
+    const teacherRefFor = createSourceTeacherRegistry();
+    return { rows: parsed.records.map((row, index) => ({ dayOfWeek: row.dayOfWeek, periodNumber: row.periodNumber, className: row.className, teacherName: row.teacherName, sourceTeacherRef: teacherRefFor(row.teacherName), subjectName: row.subjectCode, subjectCode: row.subjectCode, rowNumber: index + 1 })), invalidRows: parsed.malformedCells.map((cell) => ({ rowNumber: cell.periodNumber, className: cell.className, day: "(PDF)", lesson: String(cell.periodNumber), subjectName: cell.sourceCellText, teacherName: "(unresolved)", message: cell.reason })) };
   } finally { await rm(directory, { recursive: true, force: true }); }
 };
 
@@ -88,40 +104,40 @@ const temporaryTeacherIdentity = (sourceName: string) => `preview:${createHash("
 
 export const validatePreviewAssignments = (
   preview: Pick<PreviewData, "rows" | "teacherMatches" | "invalidRows">,
-  teacherMappings: Record<string, string> = {},
+  resolvedTeacherIds: ReadonlyMap<string, string> = new Map(),
 ) => {
   const identities = new Map<string, string>();
   const diagnostics = new Map<string, string>();
   const blockingErrors: string[] = [];
   for (const match of preview.teacherMatches) {
-    const mappedId = teacherMappings[match.sourceName];
+    const mappedId = resolvedTeacherIds.get(match.sourceTeacherRef);
     const teacherId = mappedId || match.teacherId;
     if (match.status === "ambiguous" && !mappedId) {
       blockingErrors.push(`Teacher mapping required for ${match.sourceName}.`);
       continue;
     }
-    const identity = teacherId ? `teacher:${teacherId}` : match.temporaryIdentity ?? temporaryTeacherIdentity(match.sourceName);
-    identities.set(match.sourceName, identity);
-    diagnostics.set(match.sourceName, teacherId ? opaqueIdentity("existing", teacherId) : opaqueIdentity("preview", identity));
+    const identity = teacherId ? `teacher:${teacherId}` : match.temporaryIdentity ?? temporaryTeacherIdentity(match.sourceTeacherRef);
+    identities.set(match.sourceTeacherRef, identity);
+    diagnostics.set(match.sourceTeacherRef, teacherId ? opaqueIdentity("existing", teacherId) : opaqueIdentity("preview", identity));
   }
 
   const seen = new Map<string, UploadRow>();
   const duplicateRows: number[] = [];
   for (const row of preview.rows) {
-    const identity = identities.get(row.teacherName);
+    const identity = identities.get(row.sourceTeacherRef);
     if (!identity) continue;
     const key = `${row.dayOfWeek}|${row.periodNumber}|${normalize(row.className)}|${identity}|${normalize(row.subjectCode)}`;
     const original = seen.get(key);
     if (original) {
       duplicateRows.push(row.rowNumber);
-      blockingErrors.push(`${rowDetails(row)} | Resolved teacher: ${diagnostics.get(row.teacherName)} | Exact duplicate assignment of CSV source row ${original.rowNumber}.`);
+      blockingErrors.push(`${rowDetails(row)} | Resolved teacher: ${diagnostics.get(row.sourceTeacherRef)} | Exact duplicate assignment of CSV source row ${original.rowNumber}.`);
     } else seen.set(key, row);
   }
 
   const duplicateRowNumbers = new Set(duplicateRows);
   const teacherSlots = new Map<string, UploadRow[]>();
   for (const row of preview.rows.filter((item) => !duplicateRowNumbers.has(item.rowNumber))) {
-    const identity = identities.get(row.teacherName);
+    const identity = identities.get(row.sourceTeacherRef);
     if (!identity) continue;
     const key = `${row.dayOfWeek}|${row.periodNumber}|${identity}`;
     teacherSlots.set(key, [...(teacherSlots.get(key) ?? []), row]);
@@ -130,12 +146,21 @@ export const validatePreviewAssignments = (
     if (new Set(rows.map((row) => normalize(row.className))).size <= 1) continue;
     for (const row of rows) {
       const others = rows.filter((candidate) => normalize(candidate.className) !== normalize(row.className));
-      blockingErrors.push(`${rowDetails(row)} | Resolved teacher: ${diagnostics.get(row.teacherName)} | Teacher double-booking: also assigned to ${[...new Set(others.map((candidate) => `${candidate.className} (CSV source row ${candidate.rowNumber})`))].join(", ")} in the same day and lesson.`);
+      blockingErrors.push(`${rowDetails(row)} | Resolved teacher: ${diagnostics.get(row.sourceTeacherRef)} | Teacher double-booking: also assigned to ${[...new Set(others.map((candidate) => `${candidate.className} (CSV source row ${candidate.rowNumber})`))].join(", ")} in the same day and lesson.`);
     }
   }
   if (!preview.rows.length) blockingErrors.push("No valid timetable rows were detected");
   blockingErrors.push(...preview.invalidRows.map(invalidRowDetails));
   return { blockingErrors, duplicateRows, identities, diagnostics };
+};
+
+const safeMappingDiagnostic = (stage: "preview" | "confirm", matches: PreviewTeacherMatch[], resolvedTeacherIds: ReadonlyMap<string, string>) => {
+  if (process.env.NODE_ENV === "production") return;
+  console.info("timetable teacher mapping diagnostic", {
+    stage,
+    mappingCount: matches.length,
+    mappings: matches.map((match) => ({ sourceTeacherRef: match.sourceTeacherRef, resolvedTeacherReference: resolvedTeacherIds.has(match.sourceTeacherRef) ? opaqueIdentity("existing", resolvedTeacherIds.get(match.sourceTeacherRef)!) : match.resolvedTeacherIdentifier, workload: match.workload })),
+  });
 };
 
 export const timetableUploadService = {
@@ -149,15 +174,16 @@ export const timetableUploadService = {
       prisma.masterTimetable.count({ where: { schoolId: actor.schoolId } }),
       prisma.proxyFixture.count({ where: { schoolId: actor.schoolId, masterTimetableId: { not: null } } }),
     ]);
-    const names = [...new Set(parsed.rows.map((row) => row.teacherName))];
-    const teacherMatches: PreviewTeacherMatch[] = names.map((sourceName) => {
+    const sources = [...new Map(parsed.rows.map((row) => [row.sourceTeacherRef, { sourceTeacherRef: row.sourceTeacherRef, sourceName: row.teacherName }])).values()];
+    const names = sources.map((source) => source.sourceName);
+    const teacherMatches: PreviewTeacherMatch[] = sources.map(({ sourceTeacherRef, sourceName }) => {
       const exactCandidates = teachers.filter((teacher) => teacher.name === sourceName);
       const candidates = exactCandidates.length ? exactCandidates : teachers.filter((teacher) => normalizeTeacherKey(teacher.name) === normalizeTeacherKey(sourceName));
-      const workload = parsed.rows.find((row) => row.teacherName === sourceName)?.workload;
-      if (candidates.length === 1) return { sourceName, status: "matched", teacherId: candidates[0]!.id, resolvedTeacherIdentifier: opaqueIdentity("existing", candidates[0]!.id), workload };
-      if (candidates.length > 1) return { sourceName, status: "ambiguous", candidates: candidates.map(({ id, name }) => ({ id, name, resolvedTeacherIdentifier: opaqueIdentity("existing", id) })), workload };
-      const temporaryIdentity = temporaryTeacherIdentity(sourceName);
-      return { sourceName, status: "new", temporaryIdentity, resolvedTeacherIdentifier: opaqueIdentity("preview", temporaryIdentity), workload };
+      const workload = parsed.rows.find((row) => row.sourceTeacherRef === sourceTeacherRef)?.workload;
+      if (candidates.length === 1) return { sourceTeacherRef, sourceName, status: "matched", teacherId: candidates[0]!.id, resolvedTeacherIdentifier: opaqueIdentity("existing", candidates[0]!.id), workload };
+      if (candidates.length > 1) return { sourceTeacherRef, sourceName, status: "ambiguous", candidates: candidates.map(({ id, name }) => ({ id, name, resolvedTeacherIdentifier: opaqueIdentity("existing", id) })), workload };
+      const temporaryIdentity = temporaryTeacherIdentity(sourceTeacherRef);
+      return { sourceTeacherRef, sourceName, status: "new", temporaryIdentity, resolvedTeacherIdentifier: opaqueIdentity("preview", temporaryIdentity), workload };
     });
     const { blockingErrors, duplicateRows } = validatePreviewAssignments({ rows: parsed.rows, teacherMatches, invalidRows: parsed.invalidRows });
     const duplicateRowNumbers = new Set(duplicateRows);
@@ -172,15 +198,16 @@ export const timetableUploadService = {
     const warnings = [existingRows ? `Confirmation will replace ${existingRows} current timetable rows.` : "", affectedFixtureCount ? `${affectedFixtureCount} historical fixtures will be detached from replaced timetable rows and preserved.` : "", ...parallelWarnings].filter(Boolean);
     const preview: PreviewData = {
       rows: parsed.rows, teacherMatches, duplicateRows, invalidRows: parsed.invalidRows, warnings, blockingErrors, affectedFixtureCount,
-      detected: { teachers: names, subjects: [...new Set(parsed.rows.map((row) => row.subjectName))], classes: [...new Set(parsed.rows.map((row) => row.className))], periods: [...new Set(parsed.rows.map((row) => row.periodNumber))].sort(), days: [...new Set(parsed.rows.map((row) => row.dayOfWeek))], workloads: Object.fromEntries(teacherMatches.filter((item) => item.workload !== undefined).map((item) => [item.sourceName, item.workload])) },
+      detected: { teachers: names, subjects: [...new Set(parsed.rows.map((row) => row.subjectName))], classes: [...new Set(parsed.rows.map((row) => row.className))], periods: [...new Set(parsed.rows.map((row) => row.periodNumber))].sort(), days: [...new Set(parsed.rows.map((row) => row.dayOfWeek))], workloads: teacherMatches.filter((item) => item.workload !== undefined).map((item) => ({ sourceTeacherRef: item.sourceTeacherRef, workload: item.workload })) },
       totals: { rows: parsed.rows.length, teachers: names.length, subjects: new Set(parsed.rows.map((row) => row.subjectName)).size, classes: new Set(parsed.rows.map((row) => row.className)).size, duplicateRows: duplicateRows.length, invalidRows: parsed.invalidRows.length, newTeachers: teacherMatches.filter((item) => item.status === "new").length, matchedTeachers: teacherMatches.filter((item) => item.status === "matched").length, ambiguousTeachers: teacherMatches.filter((item) => item.status === "ambiguous").length },
     };
+    safeMappingDiagnostic("preview", teacherMatches, new Map(teacherMatches.flatMap((match) => match.teacherId ? [[match.sourceTeacherRef, match.teacherId]] : [])));
     const batch = await prisma.timetableImportBatch.create({ data: { schoolId: actor.schoolId, createdById: actor.userId, originalFileName: file.originalname.slice(0, 255), fileType: isPdf ? "PDF" : "CSV", fileHash: createHash("sha256").update(file.buffer).digest("hex"), preview: preview as unknown as Prisma.InputJsonValue, warningCount: warnings.length, errorCount: blockingErrors.length } });
     await prisma.auditLog.create({ data: { schoolId: actor.schoolId, userId: actor.userId, action: "TIMETABLE_IMPORT_PREVIEWED", entityType: "TimetableImportBatch", entityId: batch.id, details: { fileType: batch.fileType, counts: preview.totals, warningCount: warnings.length, errorCount: blockingErrors.length } } });
     return { batchId: batch.id, status: batch.status, preview };
   },
 
-  async confirm(actor: { userId: string; schoolId: string }, batchId: string, input: { confirmReplace: boolean; confirmTeacherUpdates: boolean; teacherMappings?: Record<string, string> }) {
+  async confirm(actor: { userId: string; schoolId: string }, batchId: string, input: { confirmReplace: boolean; confirmTeacherUpdates: boolean; confirmTeacherMerge?: true; teacherMappings?: TeacherMappingInput[] }) {
     if (!input.confirmReplace) throw new ApiError(400, "REPLACEMENT_CONFIRMATION_REQUIRED", "Explicit timetable replacement confirmation is required");
     const batch = await prisma.timetableImportBatch.findFirst({ where: { id: batchId, schoolId: actor.schoolId, status: "PREVIEWED" }, select: { id: true, preview: true, fileType: true, warningCount: true } });
     if (!batch) throw new ApiError(404, "IMPORT_BATCH_NOT_FOUND", "Import preview was not found or was already used");
@@ -191,27 +218,41 @@ export const timetableUploadService = {
       prisma.classSection.findMany({ where: { schoolId: actor.schoolId }, select: { id: true, name: true } }),
       prisma.masterTimetable.findMany({ where: { schoolId: actor.schoolId }, select: { dayOfWeek: true, periodNumber: true, classSectionId: true, teacherId: true, subjectId: true } }),
     ]);
+    if (preview.teacherMatches.some((match) => !match.sourceTeacherRef) || preview.rows.some((row) => !row.sourceTeacherRef)) throw new ApiError(409, "STALE_IMPORT_PREVIEW", "This preview predates source teacher references. Upload the file again.");
+    const suppliedMappings = input.teacherMappings ?? preview.teacherMatches.map((match) => ({ sourceTeacherRef: match.sourceTeacherRef, sourceTeacherName: match.sourceName, resolvedTeacherId: match.teacherId }));
+    const allowedRefs = new Set(preview.teacherMatches.map((match) => match.sourceTeacherRef));
+    if (suppliedMappings.length !== allowedRefs.size || new Set(suppliedMappings.map((mapping) => mapping.sourceTeacherRef)).size !== suppliedMappings.length || suppliedMappings.some((mapping) => !allowedRefs.has(mapping.sourceTeacherRef))) throw new ApiError(400, "INVALID_TEACHER_MAPPINGS", "Every source teacher reference must be resolved exactly once for this preview");
+    const mappingsByRef = new Map(suppliedMappings.map((mapping) => [mapping.sourceTeacherRef, mapping]));
     const teacherBySource = new Map<string, string>();
     for (const match of preview.teacherMatches) {
-      const mapped = input.teacherMappings?.[match.sourceName];
-      const id = mapped || match.teacherId;
+      const mapping = mappingsByRef.get(match.sourceTeacherRef)!;
+      if (mapping.sourceTeacherName !== match.sourceName) throw new ApiError(400, "INVALID_TEACHER_MAPPING", `Source teacher reference ${match.sourceTeacherRef} does not match this preview`);
+      const mapped = mapping.resolvedTeacherId;
+      const id = mapped || (match.status === "new" ? undefined : match.teacherId);
       if (match.status === "ambiguous" && !mapped) throw new ApiError(400, "TEACHER_MAPPING_REQUIRED", `Resolve the ambiguous teacher mapping for ${match.sourceName}`);
       if (id && !teachers.some((teacher) => teacher.id === id)) throw new ApiError(400, "INVALID_TEACHER_MAPPING", `Teacher mapping for ${match.sourceName} is invalid`);
-      if (id) teacherBySource.set(match.sourceName, id);
+      if (id) teacherBySource.set(match.sourceTeacherRef, id);
     }
-    const validation = validatePreviewAssignments(preview, input.teacherMappings);
+    const explicitlyMatched = preview.teacherMatches.filter((match) => match.teacherId && teacherBySource.has(match.sourceTeacherRef));
+    const collapsedExplicitMatches = explicitlyMatched.some((match, index) => explicitlyMatched.slice(index + 1).some((other) => match.teacherId !== other.teacherId && teacherBySource.get(match.sourceTeacherRef) === teacherBySource.get(other.sourceTeacherRef)));
+    if (collapsedExplicitMatches && !input.confirmTeacherMerge) throw new ApiError(400, "TEACHER_MERGE_CONFIRMATION_REQUIRED", "Distinct explicitly matched teachers cannot be merged without an explicit merge confirmation");
+    safeMappingDiagnostic("confirm", preview.teacherMatches, teacherBySource);
+    const validation = validatePreviewAssignments(preview, teacherBySource);
     if (validation.blockingErrors.length) throw new ApiError(400, "IMPORT_HAS_BLOCKING_ERRORS", "The resolved teacher mappings contain blocking errors", { blockingErrors: validation.blockingErrors });
-    const teacherChanges = preview.teacherMatches.filter((match) => match.workload !== undefined && match.teacherId && teachers.find((teacher) => teacher.id === match.teacherId)?.baseWeeklyTeachingPeriods !== match.workload);
+    const teacherChanges = preview.teacherMatches.filter((match) => {
+      const resolvedTeacherId = teacherBySource.get(match.sourceTeacherRef);
+      return match.workload !== undefined && resolvedTeacherId && teachers.find((teacher) => teacher.id === resolvedTeacherId)?.baseWeeklyTeachingPeriods !== match.workload;
+    });
     if (teacherChanges.length && !input.confirmTeacherUpdates) throw new ApiError(400, "TEACHER_UPDATE_CONFIRMATION_REQUIRED", "Confirm workload changes for existing teachers");
     const summary = await prisma.$transaction(async (tx) => {
       const claimed = await tx.timetableImportBatch.updateMany({ where: { id: batch.id, schoolId: actor.schoolId, status: "PREVIEWED" }, data: { status: "IMPORTED", importedAt: new Date() } });
       if (claimed.count !== 1) throw new ApiError(409, "IMPORT_ALREADY_USED", "This import preview was already confirmed");
       let teachersCreated = 0; let teachersUpdated = 0;
       for (const match of preview.teacherMatches) {
-        let teacherId = teacherBySource.get(match.sourceName);
+        let teacherId = teacherBySource.get(match.sourceTeacherRef);
         if (!teacherId) {
           const created = await tx.teacher.create({ data: { schoolId: actor.schoolId, name: match.sourceName, employeeCode: `IMP-${batch.id.slice(-6).toUpperCase()}-${++teachersCreated}`, teachingLevel: "BOTH", baseWeeklyTeachingPeriods: match.workload ?? 0 } });
-          teacherId = created.id; teacherBySource.set(match.sourceName, teacherId);
+          teacherId = created.id; teacherBySource.set(match.sourceTeacherRef, teacherId);
         } else if (match.workload !== undefined && input.confirmTeacherUpdates) {
           const previousWorkload = teachers.find((teacher) => teacher.id === teacherId)?.baseWeeklyTeachingPeriods;
           await tx.teacher.updateMany({ where: { id: teacherId, schoolId: actor.schoolId }, data: { baseWeeklyTeachingPeriods: match.workload, isActive: true } });
@@ -219,12 +260,14 @@ export const timetableUploadService = {
           teachersUpdated += 1;
         }
       }
+      const finalValidation = validatePreviewAssignments(preview, teacherBySource);
+      if (finalValidation.blockingErrors.length) throw new ApiError(400, "IMPORT_HAS_BLOCKING_ERRORS", "The resolved teacher mappings contain blocking errors", { blockingErrors: finalValidation.blockingErrors });
       const subjectIds = new Map(subjects.flatMap((subject) => [[normalize(subject.name), subject.id], [normalize(subject.code), subject.id]]));
       for (const row of preview.rows) if (!subjectIds.has(normalize(row.subjectCode))) { const created = await tx.subject.create({ data: { schoolId: actor.schoolId, name: row.subjectName, code: row.subjectCode.toUpperCase().replace(/\s+/g, "-").slice(0, 30) } }); subjectIds.set(normalize(row.subjectCode), created.id); subjectIds.set(normalize(row.subjectName), created.id); }
       const classIds = new Map(classes.map((item) => [normalize(item.name), item.id]));
       for (const row of preview.rows) if (!classIds.has(normalize(row.className))) { const match = /^(\d{1,2})\s*[- ]?\s*([A-Za-z]*)$/.exec(row.className); const created = await tx.classSection.create({ data: { schoolId: actor.schoolId, name: row.className, gradeNumber: match ? Number(match[1]) : null, section: match?.[2]?.toUpperCase() || row.className.slice(0, 20), teachingLevel: match && Number(match[1]) >= 9 ? "HIGHER" : "LOWER" } }); classIds.set(normalize(row.className), created.id); }
       await tx.masterTimetable.deleteMany({ where: { schoolId: actor.schoolId } });
-      const rows = preview.rows.map((row) => ({ schoolId: actor.schoolId, dayOfWeek: row.dayOfWeek, periodNumber: row.periodNumber, classSectionId: classIds.get(normalize(row.className))!, teacherId: teacherBySource.get(row.teacherName)!, subjectId: subjectIds.get(normalize(row.subjectCode)) ?? subjectIds.get(normalize(row.subjectName))! }));
+      const rows = preview.rows.map((row) => ({ schoolId: actor.schoolId, dayOfWeek: row.dayOfWeek, periodNumber: row.periodNumber, classSectionId: classIds.get(normalize(row.className))!, teacherId: teacherBySource.get(row.sourceTeacherRef)!, subjectId: subjectIds.get(normalize(row.subjectCode)) ?? subjectIds.get(normalize(row.subjectName))! }));
       const created = await tx.masterTimetable.createMany({ data: rows });
       const result = { previousRows: previous.length, importedRows: created.count, teachersCreated, teachersUpdated, affectedFixturesPreserved: preview.affectedFixtureCount };
       await tx.timetableImportBatch.update({ where: { id: batch.id }, data: { importedRows: created.count, previousSnapshot: previous as unknown as Prisma.InputJsonValue } });

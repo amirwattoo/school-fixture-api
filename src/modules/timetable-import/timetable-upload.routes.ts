@@ -18,7 +18,8 @@ const uploadRateLimit: import("express").RequestHandler = (request, _response, n
   if (recent.length >= 10) { next(new ApiError(429, "UPLOAD_RATE_LIMITED", "Too many timetable uploads. Please try again later.")); return; }
   recent.push(now); uploadAttempts.set(key, recent); next();
 };
-const confirmSchema = z.object({ confirmReplace: z.literal(true), confirmTeacherUpdates: z.boolean().default(false), teacherMappings: z.record(z.string(), z.string().cuid()).optional() });
+const teacherMappingSchema = z.object({ sourceTeacherRef: z.string().regex(/^src_teacher_[a-f0-9]{24}$/), sourceTeacherName: z.string().min(1), resolvedTeacherId: z.string().cuid().optional() });
+const confirmSchema = z.object({ confirmReplace: z.literal(true), confirmTeacherUpdates: z.boolean().default(false), confirmTeacherMerge: z.literal(true).optional(), teacherMappings: z.union([z.array(teacherMappingSchema), z.record(z.string(), z.never()).transform(() => undefined)]).optional() });
 const paramsSchema = z.object({ batchId: z.string().cuid() });
 
 export const timetableUploadRouter = Router();
