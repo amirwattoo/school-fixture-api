@@ -97,7 +97,7 @@ test("subject aliases and teacher names normalize canonically", () => {
   assert.equal(resolveTeacherName("Mr. M. Aamir"), "Muhammad Aamir");
 });
 
-test("validation detects duplicates, teacher conflicts, and class conflicts", () => {
+test("validation blocks duplicates and teacher double-bookings but accepts parallel class assignments", () => {
   const duplicate = record();
   const teacherConflict = record({
     className: "Class 2-A",
@@ -122,6 +122,22 @@ test("validation detects duplicates, teacher conflicts, and class conflicts", ()
   assert.equal(result.teacherConflicts.length, 1);
   assert.equal(result.classConflicts.length, 1);
   assert.equal(result.valid, false);
+
+  const parallelOnly = validateTimetableRecords(
+    "test.pdf",
+    [duplicate, classConflict],
+    {
+      parsedGroups: 2,
+      sourcePages: [1, 2, 3],
+      malformedCells: [],
+      unmatchedTeachers: [],
+      unmatchedSubjects: [],
+      unmatchedClasses: [],
+    },
+  );
+  assert.equal(parallelOnly.classConflicts.length, 1);
+  assert.equal(parallelOnly.teacherConflicts.length, 0);
+  assert.equal(parallelOnly.valid, true);
 });
 
 before(async () => {

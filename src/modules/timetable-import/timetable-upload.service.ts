@@ -10,7 +10,8 @@ import { prisma } from "../../prisma/client.js";
 import { expandDayExpression, extractClassTimetableText, normalizeTeacherKey, parseClassTimetableText } from "./timetable-pdf.parser.js";
 
 type UploadRow = { dayOfWeek: DayOfWeek; periodNumber: number; className: string; teacherName: string; subjectName: string; subjectCode: string; workload?: number; rowNumber: number };
-type PreviewData = { rows: UploadRow[]; totals: Record<string, number>; detected: Record<string, unknown>; teacherMatches: Array<{ sourceName: string; status: "matched" | "new" | "ambiguous"; teacherId?: string; candidates?: Array<{ id: string; name: string }> ; workload?: number }>; duplicateRows: number[]; invalidRows: Array<{ rowNumber: number; message: string }>; warnings: string[]; blockingErrors: string[]; affectedFixtureCount: number };
+type InvalidUploadRow = { rowNumber: number; className: string; day: string; lesson: string; subjectName: string; teacherName: string; message: string };
+type PreviewData = { rows: UploadRow[]; totals: Record<string, number>; detected: Record<string, unknown>; teacherMatches: Array<{ sourceName: string; status: "matched" | "new" | "ambiguous"; teacherId?: string; candidates?: Array<{ id: string; name: string }> ; workload?: number }>; duplicateRows: number[]; invalidRows: InvalidUploadRow[]; warnings: string[]; blockingErrors: string[]; affectedFixtureCount: number };
 
 const splitCsvLine = (line: string) => {
   const cells: string[] = [];
@@ -41,8 +42,9 @@ export const parseTimetableCsv = (buffer: Buffer): { rows: UploadRow[]; invalidR
   const invalidRows: PreviewData["invalidRows"] = [];
   lines.slice(1).forEach((line, offset) => {
     const rowNumber = offset + 2;
+    let cells: string[] = [];
     try {
-      const cells = splitCsvLine(line);
+      cells = splitCsvLine(line);
       const periodNumber = Number(cells[indexes.period]);
       const className = cells[indexes.className]?.trim() ?? "";
       const teacherName = cells[indexes.teacher]?.trim() ?? "";
@@ -51,7 +53,17 @@ export const parseTimetableCsv = (buffer: Buffer): { rows: UploadRow[]; invalidR
       const workloadValue = indexes.workload >= 0 && cells[indexes.workload] ? Number(cells[indexes.workload]) : undefined;
       if (!Number.isInteger(periodNumber) || periodNumber < 1 || !className || !teacherName || !subjectName || (workloadValue !== undefined && (!Number.isInteger(workloadValue) || workloadValue < 0))) throw new Error("Missing or invalid period, class, teacher, subject, or workload");
       for (const dayOfWeek of expandDayExpression(cells[indexes.day]!.replace(/[–—]/g, "-"))) rows.push({ dayOfWeek, periodNumber, className, teacherName, subjectName, subjectCode, workload: workloadValue, rowNumber });
-    } catch (error) { invalidRows.push({ rowNumber, message: error instanceof Error ? error.message : "Invalid row" }); }
+    } catch (error) {
+      invalidRows.push({
+        rowNumber,
+        className: cells[indexes.className]?.trim() || "(missing)",
+        day: cells[indexes.day]?.trim() || "(missing)",
+        lesson: cells[indexes.period]?.trim() || "(missing)",
+        subjectName: cells[indexes.subject]?.trim() || "(missing)",
+        teacherName: cells[indexes.teacher]?.trim() || "(missing)",
+        message: error instanceof Error ? error.message : "Invalid row",
+      });
+    }
   });
   return { rows, invalidRows };
 };
@@ -62,11 +74,14 @@ const rowsFromPdf = async (buffer: Buffer): Promise<{ rows: UploadRow[]; invalid
   try {
     await writeFile(path, buffer, { flag: "wx" });
     const parsed = parseClassTimetableText(extractClassTimetableText(path));
-    return { rows: parsed.records.map((row, index) => ({ dayOfWeek: row.dayOfWeek, periodNumber: row.periodNumber, className: row.className, teacherName: row.teacherName, subjectName: row.subjectCode, subjectCode: row.subjectCode, rowNumber: index + 1 })), invalidRows: parsed.malformedCells.map((cell) => ({ rowNumber: cell.periodNumber, message: cell.reason })) };
+    return { rows: parsed.records.map((row, index) => ({ dayOfWeek: row.dayOfWeek, periodNumber: row.periodNumber, className: row.className, teacherName: row.teacherName, subjectName: row.subjectCode, subjectCode: row.subjectCode, rowNumber: index + 1 })), invalidRows: parsed.malformedCells.map((cell) => ({ rowNumber: cell.periodNumber, className: cell.className, day: "(PDF)", lesson: String(cell.periodNumber), subjectName: cell.sourceCellText, teacherName: "(unresolved)", message: cell.reason })) };
   } finally { await rm(directory, { recursive: true, force: true }); }
 };
 
 const normalize = (value: string) => value.trim().toLocaleLowerCase("en").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+const displayDay = (day: DayOfWeek) => `${day[0]}${day.slice(1).toLowerCase()}`;
+const rowDetails = (row: UploadRow) => `CSV source row ${row.rowNumber} | Class: ${row.className} | Day: ${displayDay(row.dayOfWeek)} | Lesson: ${row.periodNumber} | Subject: ${row.subjectName} | Teacher: ${row.teacherName}`;
+const invalidRowDetails = (row: InvalidUploadRow) => `CSV source row ${row.rowNumber} | Class: ${row.className} | Day: ${row.day} | Lesson: ${row.lesson} | Subject: ${row.subjectName} | Teacher: ${row.teacherName} | Invalid row: ${row.message}`;
 
 export const timetableUploadService = {
   async preview(actor: { userId: string; schoolId: string }, file: Express.Multer.File) {
@@ -88,13 +103,38 @@ export const timetableUploadService = {
     const seen = new Set<string>();
     const duplicateRows: number[] = [];
     for (const row of parsed.rows) { const key = `${row.dayOfWeek}|${row.periodNumber}|${normalize(row.className)}|${normalizeTeacherKey(row.teacherName)}|${normalize(row.subjectCode)}`; if (seen.has(key)) duplicateRows.push(row.rowNumber); else seen.add(key); }
-    const conflictKeys = new Set<string>();
     const blockingErrors: string[] = [];
-    for (const row of parsed.rows) { const teacherKey = `${row.dayOfWeek}|${row.periodNumber}|${normalizeTeacherKey(row.teacherName)}`; const classKey = `${row.dayOfWeek}|${row.periodNumber}|${normalize(row.className)}`; for (const key of [teacherKey, classKey]) { if (conflictKeys.has(key)) blockingErrors.push(`Scheduling conflict at source row ${row.rowNumber}`); else conflictKeys.add(key); } }
+    const duplicateRowNumbers = new Set(duplicateRows);
+    for (const row of parsed.rows) {
+      if (duplicateRowNumbers.has(row.rowNumber)) {
+        const original = parsed.rows.find((candidate) => candidate.rowNumber !== row.rowNumber && `${candidate.dayOfWeek}|${candidate.periodNumber}|${normalize(candidate.className)}|${normalizeTeacherKey(candidate.teacherName)}|${normalize(candidate.subjectCode)}` === `${row.dayOfWeek}|${row.periodNumber}|${normalize(row.className)}|${normalizeTeacherKey(row.teacherName)}|${normalize(row.subjectCode)}`);
+        blockingErrors.push(`${rowDetails(row)} | Exact duplicate assignment${original ? ` of CSV source row ${original.rowNumber}` : ""}.`);
+      }
+    }
+    const teacherSlots = new Map<string, UploadRow[]>();
+    for (const row of parsed.rows.filter((item) => !duplicateRowNumbers.has(item.rowNumber))) {
+      const key = `${row.dayOfWeek}|${row.periodNumber}|${normalizeTeacherKey(row.teacherName)}`;
+      teacherSlots.set(key, [...(teacherSlots.get(key) ?? []), row]);
+    }
+    for (const rows of teacherSlots.values()) {
+      const classes = new Set(rows.map((row) => normalize(row.className)));
+      if (classes.size <= 1) continue;
+      for (const row of rows) {
+        const others = rows.filter((candidate) => normalize(candidate.className) !== normalize(row.className));
+        blockingErrors.push(`${rowDetails(row)} | Teacher double-booking: also assigned to ${[...new Set(others.map((candidate) => `${candidate.className} (CSV source row ${candidate.rowNumber})`))].join(", ")} in the same day and lesson.`);
+      }
+    }
     if (!parsed.rows.length) blockingErrors.push("No valid timetable rows were detected");
-    if (parsed.invalidRows.length) blockingErrors.push("Fix invalid rows before import");
-    if (duplicateRows.length) blockingErrors.push("Remove duplicate rows before import");
-    const warnings = [existingRows ? `Confirmation will replace ${existingRows} current timetable rows.` : "", affectedFixtureCount ? `${affectedFixtureCount} historical fixtures will be detached from replaced timetable rows and preserved.` : ""].filter(Boolean);
+    blockingErrors.push(...parsed.invalidRows.map(invalidRowDetails));
+    const parallelSlots = new Map<string, UploadRow[]>();
+    for (const row of parsed.rows.filter((item) => !duplicateRowNumbers.has(item.rowNumber))) {
+      const key = `${row.dayOfWeek}|${row.periodNumber}|${normalize(row.className)}`;
+      parallelSlots.set(key, [...(parallelSlots.get(key) ?? []), row]);
+    }
+    const parallelWarnings = [...parallelSlots.values()]
+      .filter((rows) => rows.length > 1)
+      .map((rows) => `Parallel assignments detected for ${rows[0]!.className}, ${displayDay(rows[0]!.dayOfWeek)}, Lesson ${rows[0]!.periodNumber}.`);
+    const warnings = [existingRows ? `Confirmation will replace ${existingRows} current timetable rows.` : "", affectedFixtureCount ? `${affectedFixtureCount} historical fixtures will be detached from replaced timetable rows and preserved.` : "", ...parallelWarnings].filter(Boolean);
     const preview: PreviewData = {
       rows: parsed.rows, teacherMatches, duplicateRows, invalidRows: parsed.invalidRows, warnings, blockingErrors, affectedFixtureCount,
       detected: { teachers: names, subjects: [...new Set(parsed.rows.map((row) => row.subjectName))], classes: [...new Set(parsed.rows.map((row) => row.className))], periods: [...new Set(parsed.rows.map((row) => row.periodNumber))].sort(), days: [...new Set(parsed.rows.map((row) => row.dayOfWeek))], workloads: Object.fromEntries(teacherMatches.filter((item) => item.workload !== undefined).map((item) => [item.sourceName, item.workload])) },
@@ -121,6 +161,7 @@ export const timetableUploadService = {
     for (const match of preview.teacherMatches) {
       const mapped = input.teacherMappings?.[match.sourceName];
       const id = mapped || match.teacherId;
+      if (match.status === "ambiguous" && !mapped) throw new ApiError(400, "TEACHER_MAPPING_REQUIRED", `Resolve the ambiguous teacher mapping for ${match.sourceName}`);
       if (id && !teachers.some((teacher) => teacher.id === id)) throw new ApiError(400, "INVALID_TEACHER_MAPPING", `Teacher mapping for ${match.sourceName} is invalid`);
       if (id) teacherBySource.set(match.sourceName, id);
     }

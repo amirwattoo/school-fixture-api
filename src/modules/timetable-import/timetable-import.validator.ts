@@ -112,7 +112,7 @@ export const validateTimetableRecords = (
     uniqueRows,
     (record) =>
       `${record.dayOfWeek}|${record.periodNumber}|${record.teacherName}`,
-  );
+  ).filter((conflict) => new Set(conflict.records.map((record) => record.className)).size > 1);
   const unmatchedTeachers = [
     ...parserDiagnostics.unmatchedTeachers,
     ...unmatchedFromRecords(records, "teacher"),
@@ -128,7 +128,6 @@ export const validateTimetableRecords = (
   const valid =
     parserDiagnostics.sourcePages.length === 3 &&
     duplicateRows.length === 0 &&
-    classConflicts.length === 0 &&
     teacherConflicts.length === 0 &&
     unmatchedTeachers.length === 0 &&
     unmatchedSubjects.length === 0 &&

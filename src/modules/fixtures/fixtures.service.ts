@@ -72,12 +72,15 @@ const publicationTiming = (requestId: string) => {
 };
 
 const fixtureLectureKey = (fixture: {
+  id?: string;
+  masterTimetableId?: string | null;
   periodNumber: number;
   classSectionId: string;
+  subjectId: string;
   absentTeacherId?: string;
   teacherId?: string;
 }) =>
-  `${fixture.periodNumber}:${fixture.classSectionId}:${fixture.absentTeacherId ?? fixture.teacherId}`;
+  fixture.masterTimetableId ?? (fixture.teacherId ? fixture.id : undefined) ?? `${fixture.periodNumber}:${fixture.classSectionId}:${fixture.subjectId}:${fixture.absentTeacherId ?? fixture.teacherId}`;
 
 const audit = (
   database: FixtureDb,

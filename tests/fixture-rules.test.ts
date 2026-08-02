@@ -309,6 +309,9 @@ before(async () => {
   const subject = await prisma.subject.create({
     data: { schoolId: SCHOOL_ID, name: "Mathematics", code: "MATH" },
   });
+  const parallelSubject = await prisma.subject.create({
+    data: { schoolId: SCHOOL_ID, name: "Computer Science", code: "CS" },
+  });
   const classSection = await prisma.classSection.create({
     data: {
       schoolId: SCHOOL_ID,
@@ -359,6 +362,18 @@ before(async () => {
         subjectId: subject.id,
       },
     });
+    if (teacherKey === "SHORT" && periodNumber === 6) {
+      await prisma.masterTimetable.create({
+        data: {
+          schoolId: SCHOOL_ID,
+          dayOfWeek: "MONDAY",
+          periodNumber,
+          classSectionId: timetableClass.id,
+          teacherId: ids.get(teacherKey)!,
+          subjectId: parallelSubject.id,
+        },
+      });
+    }
   }
   await prisma.proxyFixture.create({
     data: {
@@ -517,7 +532,7 @@ test("historical PRESENT records remain readable while missing rows are present 
   assert.equal(result.summary.presentByDefault, 3);
 });
 
-test("short leave from lesson 5 generates only lessons 5, 6, and 8, not lesson 2", async () => {
+test("short leave generates a distinct proxy for every parallel timetable assignment", async () => {
   const result = await fixturesService.generate(
     { schoolId: SCHOOL_ID, userId: ids.get("USER")! },
     "2026-08-03",
@@ -528,14 +543,15 @@ test("short leave from lesson 5 generates only lessons 5, 6, and 8, not lesson 2
       .filter((fixture) => fixture.absentTeacherId === ids.get("SHORT"))
       .map((fixture) => fixture.periodNumber)
       .sort((a, b) => a - b),
-    [5, 6, 8],
+    [5, 6, 6, 8],
   );
 
-  const lessonSix = result.fixtures.find(
-    (fixture) =>
-      fixture.absentTeacherId === ids.get("SHORT") &&
-      fixture.periodNumber === 6,
-  )!;
+  const lessonSixFixtures = result.fixtures.filter((fixture) => fixture.absentTeacherId === ids.get("SHORT") && fixture.periodNumber === 6);
+  assert.equal(lessonSixFixtures.length, 2);
+  assert.equal(new Set(lessonSixFixtures.map((fixture) => fixture.subjectId)).size, 2);
+  assert.equal(new Set(lessonSixFixtures.map((fixture) => fixture.classSectionId)).size, 1);
+  assert.equal(new Set(lessonSixFixtures.map((fixture) => fixture.assignedTeacherId)).size, 2);
+  const lessonSix = lessonSixFixtures[0]!;
   assert.ok(lessonSix.assignedTeacherId);
   const proxyLeave = await attendanceService.save(
     { schoolId: SCHOOL_ID, userId: ids.get("USER")! },

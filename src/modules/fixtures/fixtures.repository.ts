@@ -175,6 +175,7 @@ export const fixturesRepository = {
         date,
         periodNumber: lecture.periodNumber,
         classSectionId: lecture.classSectionId,
+        subjectId: lecture.subjectId,
         absentTeacherId: lecture.teacherId,
       },
       include: fixtureInclude,
@@ -190,6 +191,7 @@ export const fixturesRepository = {
       periodNumber: number;
       classSectionId: string;
       teacherId: string;
+      subjectId: string;
     }>,
   ) {
     if (!lectures.length) return Promise.resolve([]);
@@ -202,6 +204,7 @@ export const fixturesRepository = {
           ...lectures.map((lecture) => ({
             periodNumber: lecture.periodNumber,
             classSectionId: lecture.classSectionId,
+            subjectId: lecture.subjectId,
             absentTeacherId: lecture.teacherId,
           })),
         ],

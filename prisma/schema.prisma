@@ -163,7 +163,6 @@ model MasterTimetable {
   proxyFixtures  ProxyFixture[]
 
   @@unique([schoolId, dayOfWeek, periodNumber, classSectionId, teacherId, subjectId])
-  @@unique([schoolId, dayOfWeek, periodNumber, teacherId])
   @@index([schoolId, dayOfWeek, periodNumber])
   @@index([schoolId, teacherId, dayOfWeek, periodNumber])
   @@index([schoolId, classSectionId, dayOfWeek, periodNumber])
@@ -263,7 +262,7 @@ model ProxyFixture {
   whatsappNotifications WhatsAppNotification[]
 
   @@unique([schoolId, date, masterTimetableId])
-  @@unique([schoolId, date, periodNumber, classSectionId, absentTeacherId])
+  @@unique([schoolId, date, periodNumber, classSectionId, subjectId, absentTeacherId])
   @@index([schoolId, date, status])
   @@index([schoolId, date, assignedTeacherId])
   @@index([schoolId, date, periodNumber, assignedTeacherId])
