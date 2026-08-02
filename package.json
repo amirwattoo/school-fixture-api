@@ -9,14 +9,15 @@
     "lint": "eslint src --ext .ts",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.test.json --noEmit",
-    "test": "node --import ./tests/tsx-windows-preload.mjs --import tsx --test tests/auth.test.ts tests/phase3.test.ts tests/phase4.test.ts tests/phase5.test.ts tests/timetable-import.test.ts tests/timetable-upload.test.ts tests/timetable-upload-parser.test.ts tests/fixture-rules.test.ts tests/performance.test.ts",
+    "test": "node --import ./tests/tsx-windows-preload.mjs --import tsx --test tests/auth.test.ts tests/phase3.test.ts tests/phase4.test.ts tests/phase5.test.ts tests/timetable-import.test.ts tests/timetable-upload.test.ts tests/timetable-upload-parser.test.ts tests/split-ehsan-teachers.test.ts tests/fixture-rules.test.ts tests/performance.test.ts",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "prisma:seed": "node --import ./tests/tsx-windows-preload.mjs --import tsx prisma/seed.ts",
     "timetable:parse": "node --import ./tests/tsx-windows-preload.mjs --import tsx scripts/parse-official-timetable.ts",
     "timetable:import": "node --import ./tests/tsx-windows-preload.mjs --import tsx scripts/import-official-timetable.ts",
-    "admin:update-email": "node --import ./tests/tsx-windows-preload.mjs --import tsx scripts/update-intended-admin-email.ts"
+    "admin:update-email": "node --import ./tests/tsx-windows-preload.mjs --import tsx scripts/update-intended-admin-email.ts",
+    "admin:split-ehsan-teachers": "node --import ./tests/tsx-windows-preload.mjs --import tsx scripts/split-ehsan-teachers.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.15.0",

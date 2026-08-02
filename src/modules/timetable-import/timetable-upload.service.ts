@@ -9,9 +9,9 @@ import { referenceCache } from "../../common/reference-cache.js";
 import { prisma } from "../../prisma/client.js";
 import { expandDayExpression, extractClassTimetableText, normalizeTeacherKey, parseClassTimetableText } from "./timetable-pdf.parser.js";
 
-export type UploadRow = { dayOfWeek: DayOfWeek; periodNumber: number; className: string; teacherName: string; sourceTeacherRef: string; subjectName: string; subjectCode: string; workload?: number; rowNumber: number };
+export type UploadRow = { dayOfWeek: DayOfWeek; periodNumber: number; className: string; teacherName: string; teacherId?: string; employeeCode?: string; sourceTeacherRef: string; subjectName: string; subjectCode: string; workload?: number; rowNumber: number };
 type InvalidUploadRow = { rowNumber: number; className: string; day: string; lesson: string; subjectName: string; teacherName: string; message: string };
-export type PreviewTeacherMatch = { sourceTeacherRef: string; sourceName: string; status: "matched" | "new" | "ambiguous"; teacherId?: string; temporaryIdentity?: string; resolvedTeacherIdentifier?: string; candidates?: Array<{ id: string; name: string; resolvedTeacherIdentifier: string }>; workload?: number };
+export type PreviewTeacherMatch = { sourceTeacherRef: string; sourceName: string; sourceEmployeeCode?: string; status: "matched" | "new" | "ambiguous"; teacherId?: string; temporaryIdentity?: string; resolvedTeacherIdentifier?: string; candidates?: Array<{ id: string; name: string; resolvedTeacherIdentifier: string }>; workload?: number };
 export type TeacherMappingInput = { sourceTeacherRef: string; sourceTeacherName: string; resolvedTeacherId?: string };
 type PreviewData = { rows: UploadRow[]; totals: Record<string, number>; detected: Record<string, unknown>; teacherMatches: PreviewTeacherMatch[]; duplicateRows: number[]; invalidRows: InvalidUploadRow[]; warnings: string[]; blockingErrors: string[]; affectedFixtureCount: number };
 
@@ -32,14 +32,15 @@ const splitCsvLine = (line: string) => {
   return cells;
 };
 
-const sourceTeacherRef = (sourceName: string, occurrence: number) => `src_teacher_${createHash("sha256").update(`${sourceName}\u0000${occurrence}`).digest("hex").slice(0, 24)}`;
+const sourceTeacherRef = (sourceIdentity: string, occurrence: number) => `src_teacher_${createHash("sha256").update(`${sourceIdentity}\u0000${occurrence}`).digest("hex").slice(0, 24)}`;
 const createSourceTeacherRegistry = () => {
-  const sources: Array<{ sourceName: string; ref: string }> = [];
-  return (sourceName: string) => {
-    const existing = sources.find((source) => source.sourceName === sourceName);
+  const sources: Array<{ sourceIdentity: string; ref: string }> = [];
+  return (sourceName: string, teacherId?: string, employeeCode?: string) => {
+    const sourceIdentity = teacherId ? `id:${teacherId}` : employeeCode ? `code:${employeeCode}` : `name:${sourceName}`;
+    const existing = sources.find((source) => source.sourceIdentity === sourceIdentity);
     if (existing) return existing.ref;
-    const ref = sourceTeacherRef(sourceName, sources.length + 1);
-    sources.push({ sourceName, ref });
+    const ref = sourceTeacherRef(sourceIdentity, sources.length + 1);
+    sources.push({ sourceIdentity, ref });
     return ref;
   };
 };
@@ -50,7 +51,7 @@ export const parseTimetableCsv = (buffer: Buffer): { rows: UploadRow[]; invalidR
   if (!lines.length) throw new ApiError(400, "EMPTY_TIMETABLE", "The timetable file is empty");
   const headers = splitCsvLine(lines[0]!).map((header) => header.toLowerCase().replace(/[ _-]/g, ""));
   const column = (...names: string[]) => headers.findIndex((header) => names.includes(header));
-  const indexes = { day: column("day", "days", "dayofweek"), period: column("period", "periodnumber", "lesson"), className: column("class", "classname", "classsection", "section"), teacher: column("teacher", "teachername"), subject: column("subject", "subjectname"), subjectCode: column("subjectcode", "code"), workload: column("workload", "weeklyworkload", "periodsperweek") };
+  const indexes = { day: column("day", "days", "dayofweek"), period: column("period", "periodnumber", "lesson"), className: column("class", "classname", "classsection", "section"), teacher: column("teacher", "teachername"), teacherId: column("teacherid"), employeeCode: column("employeecode", "teachercode"), subject: column("subject", "subjectname"), subjectCode: column("subjectcode", "code"), workload: column("workload", "weeklyworkload", "periodsperweek") };
   if ([indexes.day, indexes.period, indexes.className, indexes.teacher, indexes.subject].some((index) => index < 0)) throw new ApiError(400, "INVALID_CSV_HEADERS", "CSV requires day, period, class, teacher, and subject columns");
   const rows: UploadRow[] = [];
   const invalidRows: PreviewData["invalidRows"] = [];
@@ -63,12 +64,14 @@ export const parseTimetableCsv = (buffer: Buffer): { rows: UploadRow[]; invalidR
       const periodNumber = Number(cells[indexes.period]);
       const className = cells[indexes.className]?.trim() ?? "";
       const teacherName = cells[indexes.teacher]?.trim() ?? "";
+      const teacherId = indexes.teacherId >= 0 ? cells[indexes.teacherId]?.trim() || undefined : undefined;
+      const employeeCode = indexes.employeeCode >= 0 ? cells[indexes.employeeCode]?.trim() || undefined : undefined;
       const subjectName = cells[indexes.subject]?.trim() ?? "";
       const subjectCode = indexes.subjectCode >= 0 ? cells[indexes.subjectCode]?.trim() || subjectName : subjectName;
       const workloadValue = indexes.workload >= 0 && cells[indexes.workload] ? Number(cells[indexes.workload]) : undefined;
       if (!Number.isInteger(periodNumber) || periodNumber < 1 || !className || !teacherName || !subjectName || (workloadValue !== undefined && (!Number.isInteger(workloadValue) || workloadValue < 0))) throw new Error("Missing or invalid period, class, teacher, subject, or workload");
-      const ref = teacherRefFor(teacherName);
-      for (const dayOfWeek of expandDayExpression(cells[indexes.day]!.replace(/[–—]/g, "-"))) rows.push({ dayOfWeek, periodNumber, className, teacherName, sourceTeacherRef: ref, subjectName, subjectCode, workload: workloadValue, rowNumber });
+      const ref = teacherRefFor(teacherName, teacherId, employeeCode);
+      for (const dayOfWeek of expandDayExpression(cells[indexes.day]!.replace(/[–—]/g, "-"))) rows.push({ dayOfWeek, periodNumber, className, teacherName, teacherId, employeeCode, sourceTeacherRef: ref, subjectName, subjectCode, workload: workloadValue, rowNumber });
     } catch (error) {
       invalidRows.push({
         rowNumber,
@@ -170,20 +173,25 @@ export const timetableUploadService = {
     if (!isPdf && !isCsv) throw new ApiError(415, "UNSUPPORTED_TIMETABLE_FILE", "Upload a valid PDF or CSV timetable file");
     const parsed = isPdf ? await rowsFromPdf(file.buffer) : parseTimetableCsv(file.buffer);
     const [teachers, existingRows, affectedFixtureCount] = await Promise.all([
-      prisma.teacher.findMany({ where: { schoolId: actor.schoolId }, select: { id: true, name: true, baseWeeklyTeachingPeriods: true, isActive: true } }),
+      prisma.teacher.findMany({ where: { schoolId: actor.schoolId }, select: { id: true, name: true, employeeCode: true, baseWeeklyTeachingPeriods: true, isActive: true } }),
       prisma.masterTimetable.count({ where: { schoolId: actor.schoolId } }),
       prisma.proxyFixture.count({ where: { schoolId: actor.schoolId, masterTimetableId: { not: null } } }),
     ]);
-    const sources = [...new Map(parsed.rows.map((row) => [row.sourceTeacherRef, { sourceTeacherRef: row.sourceTeacherRef, sourceName: row.teacherName }])).values()];
+    const sources = [...new Map(parsed.rows.map((row) => [row.sourceTeacherRef, { sourceTeacherRef: row.sourceTeacherRef, sourceName: row.teacherName, teacherId: row.teacherId, employeeCode: row.employeeCode }])).values()];
     const names = sources.map((source) => source.sourceName);
-    const teacherMatches: PreviewTeacherMatch[] = sources.map(({ sourceTeacherRef, sourceName }) => {
-      const exactCandidates = teachers.filter((teacher) => teacher.name === sourceName);
-      const candidates = exactCandidates.length ? exactCandidates : teachers.filter((teacher) => normalizeTeacherKey(teacher.name) === normalizeTeacherKey(sourceName));
+    const teacherMatches: PreviewTeacherMatch[] = sources.map(({ sourceTeacherRef, sourceName, teacherId, employeeCode }) => {
       const workload = parsed.rows.find((row) => row.sourceTeacherRef === sourceTeacherRef)?.workload;
-      if (candidates.length === 1) return { sourceTeacherRef, sourceName, status: "matched", teacherId: candidates[0]!.id, resolvedTeacherIdentifier: opaqueIdentity("existing", candidates[0]!.id), workload };
-      if (candidates.length > 1) return { sourceTeacherRef, sourceName, status: "ambiguous", candidates: candidates.map(({ id, name }) => ({ id, name, resolvedTeacherIdentifier: opaqueIdentity("existing", id) })), workload };
+      const identified = teacherId ? teachers.find((teacher) => teacher.id === teacherId) : undefined;
+      if (identified) return { sourceTeacherRef, sourceName, sourceEmployeeCode: employeeCode, status: "matched", teacherId: identified.id, resolvedTeacherIdentifier: opaqueIdentity("existing", identified.id), workload };
+      if (teacherId) return { sourceTeacherRef, sourceName, sourceEmployeeCode: employeeCode, status: "ambiguous", candidates: [], workload };
+      const coded = employeeCode ? teachers.find((teacher) => teacher.employeeCode === employeeCode) : undefined;
+      if (coded) return { sourceTeacherRef, sourceName, sourceEmployeeCode: employeeCode, status: "matched", teacherId: coded.id, resolvedTeacherIdentifier: opaqueIdentity("existing", coded.id), workload };
+      const exactCandidates = teachers.filter((teacher) => teacher.name === sourceName);
+      const candidates = teachers.filter((teacher) => normalizeTeacherKey(teacher.name) === normalizeTeacherKey(sourceName));
+      if (!teacherId && !employeeCode && exactCandidates.length === 1 && candidates.length === 1) return { sourceTeacherRef, sourceName, status: "matched", teacherId: exactCandidates[0]!.id, resolvedTeacherIdentifier: opaqueIdentity("existing", exactCandidates[0]!.id), workload };
+      if (candidates.length > 0) return { sourceTeacherRef, sourceName, sourceEmployeeCode: employeeCode, status: "ambiguous", candidates: candidates.map(({ id, name }) => ({ id, name, resolvedTeacherIdentifier: opaqueIdentity("existing", id) })), workload };
       const temporaryIdentity = temporaryTeacherIdentity(sourceTeacherRef);
-      return { sourceTeacherRef, sourceName, status: "new", temporaryIdentity, resolvedTeacherIdentifier: opaqueIdentity("preview", temporaryIdentity), workload };
+      return { sourceTeacherRef, sourceName, sourceEmployeeCode: employeeCode, status: "new", temporaryIdentity, resolvedTeacherIdentifier: opaqueIdentity("preview", temporaryIdentity), workload };
     });
     const { blockingErrors, duplicateRows } = validatePreviewAssignments({ rows: parsed.rows, teacherMatches, invalidRows: parsed.invalidRows });
     const duplicateRowNumbers = new Set(duplicateRows);
@@ -251,7 +259,8 @@ export const timetableUploadService = {
       for (const match of preview.teacherMatches) {
         let teacherId = teacherBySource.get(match.sourceTeacherRef);
         if (!teacherId) {
-          const created = await tx.teacher.create({ data: { schoolId: actor.schoolId, name: match.sourceName, employeeCode: `IMP-${batch.id.slice(-6).toUpperCase()}-${++teachersCreated}`, teachingLevel: "BOTH", baseWeeklyTeachingPeriods: match.workload ?? 0 } });
+          const created = await tx.teacher.create({ data: { schoolId: actor.schoolId, name: match.sourceName, employeeCode: match.sourceEmployeeCode ?? `IMP-${batch.id.slice(-6).toUpperCase()}-${++teachersCreated}`, teachingLevel: "BOTH", baseWeeklyTeachingPeriods: match.workload ?? 0 } });
+          if (match.sourceEmployeeCode) teachersCreated += 1;
           teacherId = created.id; teacherBySource.set(match.sourceTeacherRef, teacherId);
         } else if (match.workload !== undefined && input.confirmTeacherUpdates) {
           const previousWorkload = teachers.find((teacher) => teacher.id === teacherId)?.baseWeeklyTeachingPeriods;

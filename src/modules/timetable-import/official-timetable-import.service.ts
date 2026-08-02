@@ -172,16 +172,7 @@ export const importOfficialTimetableRecords = async (
     const existingTeachers = await tx.teacher.findMany({
       where: { schoolId },
     });
-    const teachersByName = new Map<string, (typeof existingTeachers)[number]>();
-    for (const teacher of existingTeachers) {
-      const key = normalizeTeacherKey(teacher.name);
-      if (teachersByName.has(key)) {
-        throw new Error(
-          `Multiple existing teachers normalize to "${teacher.name}"; import was refused.`,
-        );
-      }
-      teachersByName.set(key, teacher);
-    }
+    const teachersByEmployeeCode = new Map(existingTeachers.map((teacher) => [teacher.employeeCode, teacher]));
 
     for (const existing of existingTeachers) {
       if (
@@ -206,7 +197,14 @@ export const importOfficialTimetableRecords = async (
 
     const teacherIds = new Map<string, string>();
     for (const { official } of preparedOfficialTeachers) {
-      const existing = teachersByName.get(normalizeTeacherKey(official.name));
+      const coded = teachersByEmployeeCode.get(official.employeeCode);
+      const exactNameCandidates = existingTeachers.filter((teacher) => teacher.name === official.name);
+      const insensitiveNameCandidates = existingTeachers.filter((teacher) => normalizeTeacherKey(teacher.name) === normalizeTeacherKey(official.name));
+      if (!coded && exactNameCandidates.length > 1) throw new Error(`Multiple teachers have the exact name "${official.name}"; import was refused.`);
+      if (!coded && exactNameCandidates.length === 0 && insensitiveNameCandidates.length > 0) {
+        throw new Error(`Teacher "${official.name}" has only case-insensitive candidates; explicit identifier mapping is required.`);
+      }
+      const existing = coded ?? exactNameCandidates[0];
       if (existing) {
         const updated = await tx.teacher.update({
           where: { id: existing.id },

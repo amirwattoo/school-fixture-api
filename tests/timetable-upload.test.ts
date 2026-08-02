@@ -18,7 +18,7 @@ before(async () => {
 after(async () => { await closeServer?.(); await prisma.school.deleteMany({ where: { id: SCHOOL_ID } }); await prisma.$disconnect(); });
 
 const upload = (name: string, content: string, type: string) => { const form = new FormData(); form.append("file", new Blob([content], { type }), name); return fetch(`${baseUrl}/api/v1/timetable-imports/preview`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form }); };
-type UploadPreview = { data: { batchId: string; preview: { rows: Array<{ rowNumber: number; teacherName: string; sourceTeacherRef: string }>; totals: { rows: number; teachers: number; newTeachers: number; invalidRows: number }; teacherMatches: Array<{ sourceTeacherRef: string; sourceName: string; status: string; teacherId?: string; resolvedTeacherIdentifier?: string; workload?: number }>; duplicateRows: number[]; invalidRows: Array<{ rowNumber: number; message: string }>; warnings: string[]; blockingErrors: string[] } } };
+type UploadPreview = { data: { batchId: string; preview: { rows: Array<{ rowNumber: number; teacherName: string; sourceTeacherRef: string }>; totals: { rows: number; teachers: number; newTeachers: number; invalidRows: number }; teacherMatches: Array<{ sourceTeacherRef: string; sourceName: string; sourceEmployeeCode?: string; status: string; teacherId?: string; resolvedTeacherIdentifier?: string; candidates?: Array<{ id: string; name: string }>; workload?: number }>; duplicateRows: number[]; invalidRows: Array<{ rowNumber: number; message: string }>; warnings: string[]; blockingErrors: string[] } } };
 
 test("timetable upload requires authorization and rejects unsupported files", async () => {
   const form = new FormData(); form.append("file", new Blob(["data"], { type: "text/plain" }), "payload.exe");
@@ -52,7 +52,7 @@ test("legitimate parallel class assignments are informational and importable", a
   assert.ok(body.data.preview.warnings.includes("Parallel assignments detected for 9A, Monday, Lesson 4."));
 });
 
-test("existing teachers differing only by case keep distinct resolved identities", async () => {
+test("teachers differing only by case require explicit selection without employee codes", async () => {
   await prisma.teacher.createMany({ data: [
     { schoolId: SCHOOL_ID, name: "Ehsan Ul Haq", employeeCode: "BULK-01", teachingLevel: "BOTH", baseWeeklyTeachingPeriods: 28 },
     { schoolId: SCHOOL_ID, name: "Ehsan ul Haq", employeeCode: "BULK-02", teachingLevel: "BOTH", baseWeeklyTeachingPeriods: 27 },
@@ -65,18 +65,42 @@ test("existing teachers differing only by case keep distinct resolved identities
   const response = await upload("case-distinct-teachers.csv", csv, "text/csv");
   assert.equal(response.status, 201);
   const body = (await response.json()) as UploadPreview;
-  assert.deepEqual(body.data.preview.blockingErrors, []);
+  assert.equal(body.data.preview.blockingErrors.length, 2);
   assert.deepEqual(body.data.preview.duplicateRows, []);
   const matches = body.data.preview.teacherMatches;
   assert.equal(matches.length, 2);
   assert.notEqual(matches[0]!.sourceTeacherRef, matches[1]!.sourceTeacherRef);
-  assert.ok(matches.every((match) => match.status === "matched" && match.teacherId && match.resolvedTeacherIdentifier?.startsWith("existing:")));
-  assert.notEqual(matches[0]!.teacherId, matches[1]!.teacherId);
-  assert.notEqual(matches[0]!.resolvedTeacherIdentifier, matches[1]!.resolvedTeacherIdentifier);
-  const collapsedMappings = matches.map((match) => ({ sourceTeacherRef: match.sourceTeacherRef, sourceTeacherName: match.sourceName, resolvedTeacherId: matches[0]!.teacherId }));
+  assert.ok(matches.every((match) => match.status === "ambiguous" && match.candidates?.length === 2 && !match.teacherId));
+  const upperId = matches[0]!.candidates!.find((candidate) => candidate.name === "Ehsan Ul Haq")!.id;
+  const collapsedMappings = matches.map((match) => ({ sourceTeacherRef: match.sourceTeacherRef, sourceTeacherName: match.sourceName, resolvedTeacherId: upperId }));
   const collapsed = await fetch(`${baseUrl}/api/v1/timetable-imports/${body.data.batchId}/confirm`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ confirmReplace: true, confirmTeacherUpdates: true, teacherMappings: collapsedMappings }) });
   assert.equal(collapsed.status, 400);
-  assert.match(JSON.stringify(await collapsed.json()), /TEACHER_MERGE_CONFIRMATION_REQUIRED/);
+  assert.match(JSON.stringify(await collapsed.json()), /Teacher double-booking/);
+});
+
+test("employee codes resolve case-distinct teachers without false double-booking", async () => {
+  const csv = [
+    "day,period,class,teacher,employeeCode,subject,subjectCode,workload",
+    "1,4,9A,Ehsan Ul Haq,BULK-01,Biology,BIO,28",
+    "1,4,9B,Ehsan ul Haq,BULK-02,Chemistry,CHEM,27",
+  ].join("\n");
+  const body = (await (await upload("employee-coded-teachers.csv", csv, "text/csv")).json()) as UploadPreview;
+  assert.deepEqual(body.data.preview.blockingErrors, []);
+  const matches = body.data.preview.teacherMatches;
+  assert.ok(matches.every((match) => match.status === "matched" && match.teacherId));
+  assert.notEqual(matches[0]!.teacherId, matches[1]!.teacherId);
+  assert.deepEqual(matches.map((match) => match.sourceEmployeeCode), ["BULK-01", "BULK-02"]);
+});
+
+test("an exact teacher ID remains authoritative over a conflicting employee code", async () => {
+  const target = await prisma.teacher.findFirstOrThrow({ where: { schoolId: SCHOOL_ID, employeeCode: "BULK-01" } });
+  const csv = [
+    "day,period,class,teacher,teacherId,employeeCode,subject,subjectCode,workload",
+    `1,5,9A,Ehsan ul Haq,${target.id},BULK-02,Biology,BIO,28`,
+  ].join("\n");
+  const body = (await (await upload("teacher-id-authoritative.csv", csv, "text/csv")).json()) as UploadPreview;
+  assert.deepEqual(body.data.preview.blockingErrors, []);
+  assert.equal(body.data.preview.teacherMatches[0]!.teacherId, target.id);
 });
 
 test("same teacher in two classes at the same time is rejected with detailed rows", async () => {
@@ -120,7 +144,8 @@ test("254 grouped assignments expand to and import all 800 timetable rows", asyn
   const cachedBeforeImport = await fetch(`${baseUrl}/api/v1/timetable/grid?view=class`, { headers: { Authorization: `Bearer ${token}` } });
   assert.equal(cachedBeforeImport.status, 200);
   await prisma.teacher.createMany({ data: Array.from({ length: 28 }, (_, index) => ({ schoolId: SCHOOL_ID, name: `Regression Teacher ${String(index + 3).padStart(2, "0")}`, employeeCode: `REG-${String(index + 3).padStart(2, "0")}`, teachingLevel: "BOTH" as const, baseWeeklyTeachingPeriods: 10 + ((index + 3) % 15) })), skipDuplicates: true });
-  const csv = await readFile(new URL("./fixtures/timetable-import-800-case-distinct.csv", import.meta.url), "utf8");
+  const rawCsv = await readFile(new URL("./fixtures/timetable-import-800-case-distinct.csv", import.meta.url), "utf8");
+  const csv = rawCsv.split(/\r?\n/).map((line, index) => !line ? line : index === 0 ? `${line},employeeCode` : `${line},${line.includes(",Ehsan Ul Haq,") ? "BULK-01" : line.includes(",Ehsan ul Haq,") ? "BULK-02" : ""}`).join("\n");
   const response = await upload("official-800.csv", csv, "text/csv");
   assert.equal(response.status, 201);
   const body = (await response.json()) as UploadPreview;
