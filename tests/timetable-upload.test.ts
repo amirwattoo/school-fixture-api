@@ -17,7 +17,7 @@ before(async () => {
 after(async () => { await closeServer?.(); await prisma.school.deleteMany({ where: { id: SCHOOL_ID } }); await prisma.$disconnect(); });
 
 const upload = (name: string, content: string, type: string) => { const form = new FormData(); form.append("file", new Blob([content], { type }), name); return fetch(`${baseUrl}/api/v1/timetable-imports/preview`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form }); };
-type UploadPreview = { data: { batchId: string; preview: { totals: { rows: number; newTeachers: number; invalidRows: number }; duplicateRows: number[]; invalidRows: Array<{ rowNumber: number; message: string }>; warnings: string[]; blockingErrors: string[] } } };
+type UploadPreview = { data: { batchId: string; preview: { totals: { rows: number; newTeachers: number; invalidRows: number }; teacherMatches: Array<{ sourceName: string; status: string; teacherId?: string; resolvedTeacherIdentifier?: string }>; duplicateRows: number[]; invalidRows: Array<{ rowNumber: number; message: string }>; warnings: string[]; blockingErrors: string[] } } };
 
 test("timetable upload requires authorization and rejects unsupported files", async () => {
   const form = new FormData(); form.append("file", new Blob(["data"], { type: "text/plain" }), "payload.exe");
@@ -49,6 +49,28 @@ test("legitimate parallel class assignments are informational and importable", a
   const body = (await response.json()) as UploadPreview;
   assert.deepEqual(body.data.preview.blockingErrors, []);
   assert.ok(body.data.preview.warnings.includes("Parallel assignments detected for 9A, Monday, Lesson 4."));
+});
+
+test("existing teachers differing only by case keep distinct resolved identities", async () => {
+  await prisma.teacher.createMany({ data: [
+    { schoolId: SCHOOL_ID, name: "Ehsan Ul Haq", employeeCode: "BULK-01", teachingLevel: "BOTH", baseWeeklyTeachingPeriods: 28 },
+    { schoolId: SCHOOL_ID, name: "Ehsan ul Haq", employeeCode: "BULK-02", teachingLevel: "BOTH", baseWeeklyTeachingPeriods: 27 },
+  ], skipDuplicates: true });
+  const csv = [
+    "day,period,class,teacher,subject,subjectCode,workload",
+    "1,4,9A,Ehsan Ul Haq,Biology,BIO,28",
+    "1,4,9B,Ehsan ul Haq,Chemistry,CHEM,27",
+  ].join("\n");
+  const response = await upload("case-distinct-teachers.csv", csv, "text/csv");
+  assert.equal(response.status, 201);
+  const body = (await response.json()) as UploadPreview;
+  assert.deepEqual(body.data.preview.blockingErrors, []);
+  assert.deepEqual(body.data.preview.duplicateRows, []);
+  const matches = body.data.preview.teacherMatches;
+  assert.equal(matches.length, 2);
+  assert.ok(matches.every((match) => match.status === "matched" && match.teacherId && match.resolvedTeacherIdentifier?.startsWith("existing:")));
+  assert.notEqual(matches[0]!.teacherId, matches[1]!.teacherId);
+  assert.notEqual(matches[0]!.resolvedTeacherIdentifier, matches[1]!.resolvedTeacherIdentifier);
 });
 
 test("same teacher in two classes at the same time is rejected with detailed rows", async () => {
@@ -83,10 +105,10 @@ test("exact duplicate assignments are rejected with the exact reason", async () 
 test("254 grouped assignments expand to and import all 800 timetable rows", async () => {
   const teachers = Array.from({ length: 20 }, (_, index) => ({
     schoolId: SCHOOL_ID,
-    name: `Bulk Teacher ${String(index + 1).padStart(2, "0")}`,
+    name: index === 0 ? "Ehsan Ul Haq" : index === 1 ? "Ehsan ul Haq" : `Bulk Teacher ${String(index + 1).padStart(2, "0")}`,
     employeeCode: `BULK-${String(index + 1).padStart(2, "0")}`,
     teachingLevel: "BOTH" as const,
-    baseWeeklyTeachingPeriods: index + 10,
+    baseWeeklyTeachingPeriods: index === 0 ? 28 : index === 1 ? 27 : index + 10,
   }));
   await prisma.teacher.createMany({ data: teachers, skipDuplicates: true });
   const cachedBeforeImport = await fetch(`${baseUrl}/api/v1/timetable/grid?view=class`, { headers: { Authorization: `Bearer ${token}` } });
@@ -107,6 +129,7 @@ test("254 grouped assignments expand to and import all 800 timetable rows", asyn
   const body = (await response.json()) as UploadPreview;
   assert.equal(body.data.preview.totals.rows, 800);
   assert.deepEqual(body.data.preview.blockingErrors, []);
+  assert.deepEqual(body.data.preview.duplicateRows, []);
   assert.ok(body.data.preview.warnings.some((warning) => warning.startsWith("Parallel assignments detected")));
 
   const confirmed = await fetch(`${baseUrl}/api/v1/timetable-imports/${body.data.batchId}/confirm`, {
@@ -120,5 +143,9 @@ test("254 grouped assignments expand to and import all 800 timetable rows", asyn
   assert.equal(refreshedGrid.data.grid.entries.length, 800);
   const preservedWorkloads = await prisma.teacher.findMany({ where: { schoolId: SCHOOL_ID, employeeCode: { startsWith: "BULK-" } }, select: { name: true, baseWeeklyTeachingPeriods: true } });
   assert.equal(preservedWorkloads.length, 20);
-  assert.ok(preservedWorkloads.every((teacher) => teacher.baseWeeklyTeachingPeriods === Number(teacher.name.slice(-2)) + 9));
+  assert.deepEqual(Object.fromEntries(preservedWorkloads.map((teacher) => [teacher.name, teacher.baseWeeklyTeachingPeriods])), {
+    "Ehsan Ul Haq": 28,
+    "Ehsan ul Haq": 27,
+    ...Object.fromEntries(Array.from({ length: 18 }, (_, index) => [`Bulk Teacher ${String(index + 3).padStart(2, "0")}`, index + 12])),
+  });
 });
