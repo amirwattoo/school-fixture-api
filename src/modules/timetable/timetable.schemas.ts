@@ -20,9 +20,14 @@ export const createTimetableEntrySchema = z.object({
 
 export const updateTimetableEntrySchema = createTimetableEntrySchema
   .partial()
-  .refine((value) => Object.keys(value).length > 0, {
+  .extend({ confirmChange: z.literal(true) })
+  .refine((value) => Object.keys(value).some((key) => key !== "confirmChange"), {
     message: "At least one field is required",
   });
+
+export const timetableGridQuerySchema = z.object({
+  view: z.enum(["class", "teacher"]),
+});
 
 export const timetableEntryIdSchema = z.object({
   entryId: z.string().cuid(),

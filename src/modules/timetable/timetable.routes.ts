@@ -6,6 +6,7 @@ import { authorizeRoles } from "../auth/authorize-roles.middleware.js";
 import {
   createTimetableEntry,
   deleteTimetableEntry,
+  getTimetableGrid,
   getTimetableEntry,
   listTimetableEntries,
   updateTimetableEntry,
@@ -18,6 +19,7 @@ timetableRouter.use(
   authorizeRoles("PRINCIPAL", "TIMETABLE_INCHARGE"),
 );
 timetableRouter.get("/", asyncHandler(listTimetableEntries));
+timetableRouter.get("/grid", asyncHandler(getTimetableGrid));
 timetableRouter.post("/", asyncHandler(createTimetableEntry));
 timetableRouter.get("/:entryId", asyncHandler(getTimetableEntry));
 timetableRouter.patch("/:entryId", asyncHandler(updateTimetableEntry));

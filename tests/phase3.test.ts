@@ -364,15 +364,23 @@ test("creates a timetable entry and permits a self-excluding update", async () =
   assert.equal(created.response.status, 201);
   timetableEntryId = created.body.data!.entry.id;
 
-  const updated = await request(`/api/v1/timetable/${timetableEntryId}`, {
+  const withoutConfirmation = await request(`/api/v1/timetable/${timetableEntryId}`, {
     method: "PATCH",
     headers: authorized(principalToken),
     body: JSON.stringify({ periodNumber: 1 }),
   });
+  assert.equal(withoutConfirmation.response.status, 400);
+
+  const updated = await request(`/api/v1/timetable/${timetableEntryId}`, {
+    method: "PATCH",
+    headers: authorized(principalToken),
+    body: JSON.stringify({ periodNumber: 1, confirmChange: true }),
+  });
   assert.equal(updated.response.status, 200);
+  assert.ok(await prisma.auditLog.findFirst({ where: { schoolId: SCHOOL_ID, entityId: timetableEntryId, action: "TIMETABLE_ENTRY_UPDATED" } }));
 });
 
-test("rejects teacher and class timetable conflicts specifically", async () => {
+test("rejects teacher double-bookings and exact duplicates but permits parallel class assignments", async () => {
   const teacherConflict = await request("/api/v1/timetable", {
     method: "POST",
     headers: authorized(principalToken),
@@ -386,7 +394,7 @@ test("rejects teacher and class timetable conflicts specifically", async () => {
   });
   assert.equal(teacherConflict.body.error?.code, "TEACHER_TIMETABLE_CONFLICT");
 
-  const classConflict = await request("/api/v1/timetable", {
+  const parallel = await request<{ entry: { id: string } }>("/api/v1/timetable", {
     method: "POST",
     headers: authorized(principalToken),
     body: JSON.stringify({
@@ -397,7 +405,48 @@ test("rejects teacher and class timetable conflicts specifically", async () => {
       subjectId: subjectAId,
     }),
   });
-  assert.equal(classConflict.body.error?.code, "CLASS_TIMETABLE_CONFLICT");
+  assert.equal(parallel.response.status, 201);
+
+  const duplicate = await request("/api/v1/timetable", {
+    method: "POST",
+    headers: authorized(principalToken),
+    body: JSON.stringify({
+      dayOfWeek: "MONDAY",
+      periodNumber: 1,
+      classSectionId: classAId,
+      teacherId: teacherBId,
+      subjectId: subjectAId,
+    }),
+  });
+  assert.equal(duplicate.body.error?.code, "DUPLICATE_TIMETABLE_ASSIGNMENT");
+});
+
+test("grid endpoint is normalized, school scoped, and cache invalidates after edits", async () => {
+  type GridResponse = { grid: { periodsPerDay: number; entries: Array<{ id: string; periodNumber: number; classSectionId: string; teacherId: string }>; classes: Array<{ id: string }>; teachers: Array<{ id: string; baseWeeklyTeachingPeriods: number }>; subjects: Array<{ id: string }> } };
+  const first = await request<GridResponse>("/api/v1/timetable/grid?view=class", { headers: authorized(principalToken) });
+  assert.equal(first.response.status, 200);
+  assert.equal(first.body.data!.grid.periodsPerDay, 8);
+  assert.equal(first.body.data!.grid.entries.filter((entry) => entry.classSectionId === classAId && entry.periodNumber === 1).length, 2);
+  assert.ok(first.body.data!.grid.entries.every((entry) => entry.teacherId !== otherTeacherId));
+  assert.ok(first.body.data!.grid.classes.every((item) => item.id !== otherClassId));
+  assert.ok(first.body.data!.grid.subjects.every((item) => item.id !== otherSubjectId));
+
+  const updated = await request(`/api/v1/timetable/${timetableEntryId}`, {
+    method: "PATCH",
+    headers: authorized(inchargeToken),
+    body: JSON.stringify({ periodNumber: 2, confirmChange: true }),
+  });
+  assert.equal(updated.response.status, 200);
+  const refreshed = await request<GridResponse>("/api/v1/timetable/grid?view=class", { headers: authorized(principalToken) });
+  assert.equal(refreshed.body.data!.grid.entries.find((entry) => entry.id === timetableEntryId)?.periodNumber, 2);
+});
+
+test("historically referenced timetable assignments cannot be deleted", async () => {
+  const user = await prisma.systemUser.findFirstOrThrow({ where: { schoolId: SCHOOL_ID, role: "PRINCIPAL" } });
+  await prisma.proxyFixture.create({ data: { schoolId: SCHOOL_ID, date: new Date("2026-08-03T00:00:00.000Z"), periodNumber: 2, masterTimetableId: timetableEntryId, classSectionId: classAId, subjectId: subjectAId, absentTeacherId: teacherAId, overriddenById: user.id } });
+  const deleted = await request(`/api/v1/timetable/${timetableEntryId}`, { method: "DELETE", headers: authorized(principalToken) });
+  assert.equal(deleted.response.status, 409);
+  assert.equal(deleted.body.error?.code, "TIMETABLE_ENTRY_REFERENCED_BY_FIXTURE");
 });
 
 test("rejects inactive and other-school timetable resources", async () => {

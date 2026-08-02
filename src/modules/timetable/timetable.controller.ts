@@ -4,6 +4,7 @@ import { sendSuccess } from "../../common/response.js";
 import {
   createTimetableEntrySchema,
   timetableEntryIdSchema,
+  timetableGridQuerySchema,
   timetableQuerySchema,
   updateTimetableEntrySchema,
 } from "./timetable.schemas.js";
@@ -18,6 +19,15 @@ export const listTimetableEntries: RequestHandler = async (
     timetableQuerySchema.parse(request.query),
   );
   sendSuccess(response, { entries }, "Timetable entries retrieved");
+};
+
+export const getTimetableGrid: RequestHandler = async (request, response) => {
+  const { view } = timetableGridQuerySchema.parse(request.query);
+  sendSuccess(
+    response,
+    { grid: await timetableService.grid(request.auth!.schoolId, view) },
+    "Timetable grid retrieved",
+  );
 };
 
 export const getTimetableEntry: RequestHandler = async (request, response) => {
@@ -47,10 +57,12 @@ export const updateTimetableEntry: RequestHandler = async (
   response,
 ) => {
   const { entryId } = timetableEntryIdSchema.parse(request.params);
+  const { confirmChange: _confirmChange, ...input } =
+    updateTimetableEntrySchema.parse(request.body);
   const entry = await timetableService.update(
     request.auth!,
     entryId,
-    updateTimetableEntrySchema.parse(request.body),
+    input,
   );
   sendSuccess(response, { entry }, "Timetable entry updated");
 };

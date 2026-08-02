@@ -9,6 +9,7 @@ export const timetableInclude = {
       name: true,
       employeeCode: true,
       isActive: true,
+      baseWeeklyTeachingPeriods: true,
     },
   },
   classSection: {
@@ -39,6 +40,56 @@ export const timetableRepository = {
       include: timetableInclude,
       take: 1000,
     });
+  },
+
+  async grid(schoolId: string) {
+    const [school, entries, classes, teachers, subjects] = await Promise.all([
+      prisma.school.findUnique({
+        where: { id: schoolId },
+        select: { id: true, periodsPerDay: true },
+      }),
+      prisma.masterTimetable.findMany({
+        where: { schoolId },
+        select: {
+          id: true,
+          dayOfWeek: true,
+          periodNumber: true,
+          classSectionId: true,
+          teacherId: true,
+          subjectId: true,
+        },
+        orderBy: [
+          { periodNumber: "asc" },
+          { classSection: { name: "asc" } },
+          { teacher: { name: "asc" } },
+        ],
+        take: 2001,
+      }),
+      prisma.classSection.findMany({
+        where: { schoolId, isActive: true },
+        select: { id: true, name: true, gradeNumber: true, section: true },
+        orderBy: [{ gradeNumber: "asc" }, { name: "asc" }],
+        take: 201,
+      }),
+      prisma.teacher.findMany({
+        where: { schoolId, isActive: true },
+        select: {
+          id: true,
+          name: true,
+          employeeCode: true,
+          baseWeeklyTeachingPeriods: true,
+        },
+        orderBy: { name: "asc" },
+        take: 501,
+      }),
+      prisma.subject.findMany({
+        where: { schoolId, isActive: true },
+        select: { id: true, name: true, code: true },
+        orderBy: { name: "asc" },
+        take: 201,
+      }),
+    ]);
+    return { school, entries, classes, teachers, subjects };
   },
 
   find(schoolId: string, entryId: string) {
@@ -78,24 +129,6 @@ export const timetableRepository = {
     dayOfWeek: DayOfWeek,
     periodNumber: number,
     teacherId: string,
-    excludeId?: string,
-  ) {
-    return prisma.masterTimetable.findFirst({
-      where: {
-        schoolId,
-        dayOfWeek,
-        periodNumber,
-        teacherId,
-        id: excludeId ? { not: excludeId } : undefined,
-      },
-      include: timetableInclude,
-    });
-  },
-
-  classConflict(
-    schoolId: string,
-    dayOfWeek: DayOfWeek,
-    periodNumber: number,
     classSectionId: string,
     excludeId?: string,
   ) {
@@ -104,10 +137,41 @@ export const timetableRepository = {
         schoolId,
         dayOfWeek,
         periodNumber,
-        classSectionId,
+        teacherId,
+        classSectionId: { not: classSectionId },
         id: excludeId ? { not: excludeId } : undefined,
       },
       include: timetableInclude,
+    });
+  },
+
+  exactConflict(
+    schoolId: string,
+    dayOfWeek: DayOfWeek,
+    periodNumber: number,
+    classSectionId: string,
+    teacherId: string,
+    subjectId: string,
+    excludeId?: string,
+  ) {
+    return prisma.masterTimetable.findFirst({
+      where: {
+        schoolId,
+        dayOfWeek,
+        periodNumber,
+        classSectionId,
+        teacherId,
+        subjectId,
+        id: excludeId ? { not: excludeId } : undefined,
+      },
+      include: timetableInclude,
+    });
+  },
+
+  fixtureReference(schoolId: string, entryId: string) {
+    return prisma.proxyFixture.findFirst({
+      where: { schoolId, masterTimetableId: entryId },
+      select: { id: true, date: true },
     });
   },
 

@@ -81,19 +81,22 @@ const validateConflicts = async (
   input: TimetableInput,
   excludeId?: string,
 ) => {
-  const [teacherConflict, classConflict] = await Promise.all([
+  const [teacherConflict, exactConflict] = await Promise.all([
     timetableRepository.teacherConflict(
       schoolId,
       input.dayOfWeek,
       input.periodNumber,
       input.teacherId,
+      input.classSectionId,
       excludeId,
     ),
-    timetableRepository.classConflict(
+    timetableRepository.exactConflict(
       schoolId,
       input.dayOfWeek,
       input.periodNumber,
       input.classSectionId,
+      input.teacherId,
+      input.subjectId,
       excludeId,
     ),
   ]);
@@ -104,11 +107,11 @@ const validateConflicts = async (
       `${teacherConflict.teacher.name} already teaches ${teacherConflict.classSection.name} in this period`,
     );
   }
-  if (classConflict) {
+  if (exactConflict) {
     throw new ApiError(
       409,
-      "CLASS_TIMETABLE_CONFLICT",
-      `${classConflict.classSection.name} already has ${classConflict.subject.name} in this period`,
+      "DUPLICATE_TIMETABLE_ASSIGNMENT",
+      `${exactConflict.classSection.name} already has this subject and teacher assignment on this day and lesson`,
     );
   }
 };
@@ -128,16 +131,36 @@ const handleDatabaseConflict = (error: unknown): never => {
         "The teacher already has a lecture in this period",
       );
     }
-    throw new ApiError(
-      409,
-      "CLASS_TIMETABLE_CONFLICT",
-      "The class already has a lecture in this period",
-    );
+    throw new ApiError(409, "DUPLICATE_TIMETABLE_ASSIGNMENT", "This exact timetable assignment already exists");
   }
   throw error;
 };
 
 export const timetableService = {
+  async grid(schoolId: string, view: "class" | "teacher") {
+    const data = await referenceCache.getOrLoad(
+      "timetable",
+      schoolId,
+      "grid",
+      () => databasePhase("timetable-grid", () => timetableRepository.grid(schoolId)),
+    );
+    if (!data.school)
+      throw new ApiError(404, "SCHOOL_NOT_FOUND", "School was not found");
+    if (data.entries.length > 2000)
+      throw new ApiError(409, "TIMETABLE_TOO_LARGE", "Timetable exceeds the supported 2,000 assignment limit");
+    if (data.classes.length > 200 || data.teachers.length > 500 || data.subjects.length > 200)
+      throw new ApiError(409, "TIMETABLE_REFERENCE_DATA_TOO_LARGE", "Timetable reference data exceeds the supported limit");
+    return {
+      view,
+      periodsPerDay: data.school.periodsPerDay,
+      days: ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"],
+      entries: data.entries,
+      classes: data.classes,
+      teachers: data.teachers,
+      subjects: data.subjects,
+    };
+  },
+
   async list(
     schoolId: string,
     filters: {
@@ -230,6 +253,16 @@ export const timetableService = {
 
   async delete(actor: AuditActor, entryId: string) {
     const oldEntry = await this.get(actor.schoolId, entryId);
+    const fixtureReference = await timetableRepository.fixtureReference(
+      actor.schoolId,
+      entryId,
+    );
+    if (fixtureReference)
+      throw new ApiError(
+        409,
+        "TIMETABLE_ENTRY_REFERENCED_BY_FIXTURE",
+        "This assignment is referenced by fixture history and cannot be deleted",
+      );
     const entry = await timetableRepository.delete(entryId);
     referenceCache.invalidateSchool("timetable", actor.schoolId);
     await createAuditLog(

@@ -89,6 +89,8 @@ test("254 grouped assignments expand to and import all 800 timetable rows", asyn
     baseWeeklyTeachingPeriods: index + 10,
   }));
   await prisma.teacher.createMany({ data: teachers, skipDuplicates: true });
+  const cachedBeforeImport = await fetch(`${baseUrl}/api/v1/timetable/grid?view=class`, { headers: { Authorization: `Bearer ${token}` } });
+  assert.equal(cachedBeforeImport.status, 200);
   const assignments = Array.from({ length: 160 }, (_, index) => {
     const teacherIndex = Math.floor(index / 8);
     const period = (index % 8) + 1;
@@ -114,6 +116,8 @@ test("254 grouped assignments expand to and import all 800 timetable rows", asyn
   });
   assert.equal(confirmed.status, 200);
   assert.equal(await prisma.masterTimetable.count({ where: { schoolId: SCHOOL_ID } }), 800);
+  const refreshedGrid = (await (await fetch(`${baseUrl}/api/v1/timetable/grid?view=class`, { headers: { Authorization: `Bearer ${token}` } })).json()) as { data: { grid: { entries: unknown[] } } };
+  assert.equal(refreshedGrid.data.grid.entries.length, 800);
   const preservedWorkloads = await prisma.teacher.findMany({ where: { schoolId: SCHOOL_ID, employeeCode: { startsWith: "BULK-" } }, select: { name: true, baseWeeklyTeachingPeriods: true } });
   assert.equal(preservedWorkloads.length, 20);
   assert.ok(preservedWorkloads.every((teacher) => teacher.baseWeeklyTeachingPeriods === Number(teacher.name.slice(-2)) + 9));
