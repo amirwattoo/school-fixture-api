@@ -282,7 +282,11 @@ export const timetableUploadService = {
       await tx.timetableImportBatch.update({ where: { id: batch.id }, data: { importedRows: created.count, previousSnapshot: previous as unknown as Prisma.InputJsonValue } });
       await tx.auditLog.create({ data: { schoolId: actor.schoolId, userId: actor.userId, action: "TIMETABLE_IMPORTED", entityType: "TimetableImportBatch", entityId: batch.id, details: { ...result, fileType: batch.fileType, warningCount: batch.warningCount } } });
       return result;
+    }, {
+      maxWait: 30_000,
+      timeout: 300_000,
     });
+
     referenceCache.invalidateAllForSchool(actor.schoolId);
     return summary;
   },
