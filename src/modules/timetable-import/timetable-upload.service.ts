@@ -223,7 +223,15 @@ export const timetableUploadService = {
     const [teachers, subjects, classes, previous] = await Promise.all([
       prisma.teacher.findMany({ where: { schoolId: actor.schoolId }, select: { id: true, name: true, baseWeeklyTeachingPeriods: true } }),
       prisma.subject.findMany({ where: { schoolId: actor.schoolId }, select: { id: true, name: true, code: true } }),
-      prisma.classSection.findMany({ where: { schoolId: actor.schoolId }, select: { id: true, name: true } }),
+      prisma.classSection.findMany({
+        where: { schoolId: actor.schoolId },
+        select: {
+          id: true,
+          name: true,
+          gradeNumber: true,
+          section: true,
+        },
+      }),
       prisma.masterTimetable.findMany({ where: { schoolId: actor.schoolId }, select: { dayOfWeek: true, periodNumber: true, classSectionId: true, teacherId: true, subjectId: true } }),
     ]);
     if (preview.teacherMatches.some((match) => !match.sourceTeacherRef) || preview.rows.some((row) => !row.sourceTeacherRef)) throw new ApiError(409, "STALE_IMPORT_PREVIEW", "This preview predates source teacher references. Upload the file again.");
@@ -273,8 +281,67 @@ export const timetableUploadService = {
       if (finalValidation.blockingErrors.length) throw new ApiError(400, "IMPORT_HAS_BLOCKING_ERRORS", "The resolved teacher mappings contain blocking errors", { blockingErrors: finalValidation.blockingErrors });
       const subjectIds = new Map(subjects.flatMap((subject) => [[normalize(subject.name), subject.id], [normalize(subject.code), subject.id]]));
       for (const row of preview.rows) if (!subjectIds.has(normalize(row.subjectCode))) { const created = await tx.subject.create({ data: { schoolId: actor.schoolId, name: row.subjectName, code: row.subjectCode.toUpperCase().replace(/\s+/g, "-").slice(0, 30) } }); subjectIds.set(normalize(row.subjectCode), created.id); subjectIds.set(normalize(row.subjectName), created.id); }
-      const classIds = new Map(classes.map((item) => [normalize(item.name), item.id]));
-      for (const row of preview.rows) if (!classIds.has(normalize(row.className))) { const match = /^(\d{1,2})\s*[- ]?\s*([A-Za-z]*)$/.exec(row.className); const created = await tx.classSection.create({ data: { schoolId: actor.schoolId, name: row.className, gradeNumber: match ? Number(match[1]) : null, section: match?.[2]?.toUpperCase() || row.className.slice(0, 20), teachingLevel: match && Number(match[1]) >= 9 ? "HIGHER" : "LOWER" } }); classIds.set(normalize(row.className), created.id); }
+      const classIds = new Map<string, string>();
+      const classIdsByGradeSection = new Map<string, string>();
+
+      for (const item of classes) {
+        classIds.set(normalize(item.name), item.id);
+
+        if (item.gradeNumber !== null && item.section) {
+          classIdsByGradeSection.set(
+            `${item.gradeNumber}|${normalize(item.section)}`,
+            item.id,
+          );
+        }
+      }
+
+      for (const row of preview.rows) {
+        const normalizedClassName = normalize(row.className);
+
+        if (classIds.has(normalizedClassName)) {
+          continue;
+        }
+
+        const parsedClass =
+          /^(\d{1,2})\s*[- ]?\s*([A-Za-z]*)$/.exec(row.className);
+
+        const gradeNumber = parsedClass ? Number(parsedClass[1]) : null;
+        const section =
+          parsedClass?.[2]?.toUpperCase() || row.className.slice(0, 20);
+
+        const gradeSectionKey =
+          gradeNumber === null
+            ? null
+            : `${gradeNumber}|${normalize(section)}`;
+
+        const existingClassId = gradeSectionKey
+          ? classIdsByGradeSection.get(gradeSectionKey)
+          : undefined;
+
+        if (existingClassId) {
+          classIds.set(normalizedClassName, existingClassId);
+          continue;
+        }
+
+        const created = await tx.classSection.create({
+          data: {
+            schoolId: actor.schoolId,
+            name: row.className,
+            gradeNumber,
+            section,
+            teachingLevel:
+              gradeNumber !== null && gradeNumber >= 9
+                ? "HIGHER"
+                : "LOWER",
+          },
+        });
+
+        classIds.set(normalizedClassName, created.id);
+
+        if (gradeSectionKey) {
+          classIdsByGradeSection.set(gradeSectionKey, created.id);
+        }
+      }
       await tx.masterTimetable.deleteMany({ where: { schoolId: actor.schoolId } });
       const rows = preview.rows.map((row) => ({ schoolId: actor.schoolId, dayOfWeek: row.dayOfWeek, periodNumber: row.periodNumber, classSectionId: classIds.get(normalize(row.className))!, teacherId: teacherBySource.get(row.sourceTeacherRef)!, subjectId: subjectIds.get(normalize(row.subjectCode)) ?? subjectIds.get(normalize(row.subjectName))! }));
       const created = await tx.masterTimetable.createMany({ data: rows });
