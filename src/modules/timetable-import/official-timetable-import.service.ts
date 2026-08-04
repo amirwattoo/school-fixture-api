@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+﻿import { readFile } from "node:fs/promises";
 
 import { Prisma } from "@prisma/client";
 import type { PrismaClient, TeachingLevel } from "@prisma/client";
@@ -41,8 +41,8 @@ const runSerializableImport = async <T>(
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
       return await client.$transaction(callback, {
-        maxWait: 20_000,
-        timeout: 120_000,
+        maxWait: 30_000,
+        timeout: 300_000,
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
       });
     } catch (error) {
@@ -347,12 +347,13 @@ export const importOfficialTimetableRecords = async (
         details: JSON.parse(JSON.stringify(summary)) as Prisma.InputJsonValue,
       },
     });
-    return summary;
+
+     return summary;
   });
+
   referenceCache.invalidateAllForSchool(schoolId);
   return summary;
 };
-
 export const importOfficialTimetableFromFiles = async (
   schoolId: string,
   recordsPath: string,
@@ -370,3 +371,4 @@ export const importOfficialTimetableFromFiles = async (
     client,
   );
 };
+
